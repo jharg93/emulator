@@ -11,7 +11,7 @@ all: gboy snes c64 ppc 8086 mac amiga genesis appleii n64 atarixl
 gboy: gboy.cc cpu/cpu_gboy.cc gboy_apu.cc $(STDC)
 	$(LXCPP) $(CFLAGS) -o gboy gboy.cc cpu/cpu_gboy.cc $(STDC)
 
-gba: gba.cc $(STDH) $(ARMCPU) armcpu.h $(STDC)
+gba: gba.cc $(STDH) $(ARMCPU) $(STDC)
 	$(LXCPP) $(CFLAGS) -o gba gba.cc $(ARMCPU) -DGBA $(STDC)
 
 psx: psx.cc cpu/mips.cc $(STDH) $(STDC)
