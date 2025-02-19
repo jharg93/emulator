@@ -26,6 +26,8 @@
 int zprintf(const char *fmt, ...);
 #include "x86_audio.h"
 
+#define cpu_readv cpu_read16
+
 int zprintf(const char *fmt, ...)
 {
   static pthread_mutex_t ptt = PTHREAD_MUTEX_INITIALIZER;
@@ -71,6 +73,12 @@ bool seq_changed;
 uint32_t lastop;
 uint32_t extracyc;
 
+Timer framectr;
+void audio_tick();
+
+static bus_t mb(0xFFFFF);
+static bus_t io(0xFFFF);
+
 /* Screen border */
 #define EX 8
 #define EY 8
@@ -96,7 +104,7 @@ enum {
   TYPE_ESDI   = ('Y' << TYPE_SHIFT),    // es:di
   TYPE_DSSI   = ('X' << TYPE_SHIFT),    // ds:si
   TYPE_REG    = ('r' << TYPE_SHIFT),    // Register: specific
-  TYPE_EMBREG = ('g' << TYPE_SHIFT),    // Register: specific
+  TYPE_EMBREG = ('g' << TYPE_SHIFT),    // Register: part of opcode
   
   SIZE_SHIFT  = 16,
   SIZE_MASK   = (0xFF << SIZE_SHIFT),
@@ -104,10 +112,10 @@ enum {
   SIZE_WORD   = ('w' << SIZE_SHIFT),    // 16-bit
   SIZE_DWORD  = ('d' << SIZE_SHIFT),    // 32-bit
   SIZE_QWORD  = ('q' << SIZE_SHIFT),    // 64-bit
-  SIZE_VWORD  = ('v' << SIZE_SHIFT),    // operand size
+  SIZE_VWORD  = ('v' << SIZE_SHIFT),    // operand size (16/32-bit)
   SIZE_SEGREG = ('s' << SIZE_SHIFT),    // segment register (16-bit)
   SIZE_PTR    = ('p' << SIZE_SHIFT),    // ptr16:16 or ptr16:32
-  SIZE_EMB    = ('i' << SIZE_SHIFT),    // embedded/implied value (VAL_MASK)
+  SIZE_EMB    = ('i' << SIZE_SHIFT),    // embedded value (VAL_MASK)
 
   VAL_MASK    = 0xFFFF,
 
@@ -131,7 +139,7 @@ enum {
   Mv = TYPE_EAMEM+SIZE_VWORD,
   Mp = TYPE_EAMEM+SIZE_PTR,
 
-  /* Direct memory offset */
+  /* Direct memory offset [xxxx] */
   Ob = TYPE_OFFSET+SIZE_BYTE,
   Ov = TYPE_OFFSET+SIZE_VWORD,
 
@@ -213,12 +221,12 @@ enum {
   IDT_BASE = 0x0,
 };
 
-const uint32_t szmask[] = {
+const uint32_t zmask[] = {
   0x000000FF,
   0x0000FFFF,
   0xFFFFFFFF,
 };
-const uint32_t sfmask[] = {
+const uint32_t nmask[] = {
   0x00000080,
   0x00008000,
   0x80000000,
@@ -252,9 +260,6 @@ uint32_t& mrr_base = i.mrr_base;
 uint32_t  mrr_seg  = 0;
 uint32_t& segpfx = i.segpfx;
 uint32_t& pfx = i.flag;
-
-static bus_t mb(0xFFFFF);
-static bus_t io(0xFFFF);
 
 constexpr uint32_t vsize(uint32_t arg, const uint32_t mask = -1) {
   /* Convert vsize to current opize */
@@ -2146,6 +2151,7 @@ void x86::init()
     cgapal[i+32].b = grey[i];
   }
   // setup egapalette
+  // https://en.wikipedia.org/wiki/Enhanced_Graphics_Adapter#/media/File:EGA_Table.svg
   for (int i = 0; i < 64; i++) {
     egapal[i].b += !!(i & 0x01) * 0xaa;
     egapal[i].g += !!(i & 0x02) * 0xaa;
@@ -2222,12 +2228,12 @@ static const uint8_t parity[256] = {
 };
 
 /* Calculate sign/zero flag */
-constexpr bool _zf(const uint32_t val, const uint32_t sz) {
-  return (szmask[szb(sz)] & val) == 0;
+constexpr bool zf(const uint32_t val, const uint32_t sz) {
+  return (zmask[szb(sz)] & val) == 0;
 };
 
-constexpr bool _sf(const uint32_t val, const uint32_t sz) {
-  return (sfmask[szb(sz)] & val) != 0;
+constexpr bool sf(const uint32_t val, const uint32_t sz) {
+  return (nmask[szb(sz)] & val) != 0;
 }
 
 /* Set CPU flags */
@@ -2235,8 +2241,8 @@ static uint32_t x86_setfl(uint32_t vv, uint32_t sz)
 {
   /* Calculate parity */
   Pf = parity[vv & 0xFF];
-  Zf = _zf(vv, sz);
-  Sf = _sf(vv, sz);
+  Zf = zf(vv, sz);
+  Sf = sf(vv, sz);
   return vv;
 }
 
@@ -2250,7 +2256,7 @@ static uint32_t x86_setoc(const arg_t& arg, uint32_t res, uint32_t of, uint32_t 
 {
   x86_setfl(res, arg);
   Af = (af & 0x10) == 0x10;
-  Of = _sf(of, arg);
+  Of = sf(of, arg);
   
   switch (vsize(arg, SIZE_MASK)) {
   case SIZE_BYTE:
@@ -2315,7 +2321,6 @@ enum {
   x86_grp = 0,
   x86_osize = 0x66,
   x86_asize = 0x67,
-  x86_lock = 0xf0,
   
   /* These map direct to opcodes */
   x86_daa = 0x27,
@@ -2358,9 +2363,10 @@ enum {
   x86_loopz = 0xe1,
   x86_loop = 0xe2,
   x86_jcxz = 0xe3,
-  x86_hlt = 0xf4,
-  x86_repz = 0xf3,
+  x86_lock = 0xf0,
   x86_repnz = 0xf2,
+  x86_repz = 0xf3,
+  x86_hlt = 0xf4,
   x86_cmc = 0xf5,
   x86_clc = 0xf8,
   x86_stc = 0xf9,
@@ -2387,6 +2393,17 @@ enum {
   x86_jle = 0x7e,
   x86_jg = 0x7f,
 
+  // first instance
+  x86_in = 0xe4,
+  x86_out = 0xe5,
+  x86_ins = 0x6c,
+  x86_outs = 0x6e,
+  x86_ret = 0xc2,
+  x86_retf = 0xca,
+  x86_mov = 0x88,
+  x86_xchg = 0x86,
+  x86_int = 0xcd,
+  
   // 386
   x86_bsf = MRRF + 0xfbc,
   x86_bsr = MRRF + 0xfbd,
@@ -2412,18 +2429,7 @@ enum {
   
   /* These map to multiple opcodes */
   x86_pop  =  GRP0,
-  x86_mov,
-  x86_xchg,
-  x86_ret,
-  x86_retf,
-  x86_in,
-  x86_out,
   x86_imul,
-  x86_int,
-  x86_insb,
-  x86_insw,
-  x86_outsb,
-  x86_outsw,
 
   /*====================================*
    * Group ocodes. Decoded by mrr.ggg
@@ -2589,7 +2595,7 @@ constexpr opcode_t mkop(int id, int opfn, uint32_t a0, uint32_t a1, uint32_t a2,
 
 #define __ 0
 
-opcode_t opix[] = {
+constexpr opcode_t opix[] = {
   mkop(0x00, x86_add,    Eb,  Gb, __, __, MRR,   "add      %Eb, %Gb"),
   mkop(0x01, x86_add,    Ev,  Gv, __, __, MRR,   "add      %Ev, %Gv"),
   mkop(0x02, x86_add,    Gb,  Eb, __, __, MRR,   "add      %Gb, %Eb"),
@@ -2630,7 +2636,7 @@ opcode_t opix[] = {
   mkop(0x23, x86_and,    Gv,  Ev, __, __, MRR,   "and      %Gv, %Ev"),
   mkop(0x24, x86_and,    rAL, Ib, __,  4, __,    "and      al, %Ib"),
   mkop(0x25, x86_and,    rvAX,Iv, __,  4, __,    "and      %v0, %Iv"),
-  mkop(0x26, x86_segpfx, rES, __, __, __, PFX,   NULL),
+  mkop(0x26, x86_segpfx, rES, __, __, __, PFX,   "<es>"),
   mkop(0x27, x86_daa,    __,  __, __, __, __,    "daa"),
   mkop(0x28, x86_sub,    Eb,  Gb, __, __, MRR,   "sub      %Eb, %Gb"),
   mkop(0x29, x86_sub,    Ev,  Gv, __, __, MRR,   "sub      %Ev, %Gv"),
@@ -2638,7 +2644,7 @@ opcode_t opix[] = {
   mkop(0x2b, x86_sub,    Gv,  Ev, __, __, MRR,   "sub      %Gv, %Ev"),
   mkop(0x2c, x86_sub,    rAL, Ib, __,  4, __,    "sub      al, %Ib"),
   mkop(0x2d, x86_sub,    rvAX,Iv, __,  4, __,    "sub      %v0, %Iv"),
-  mkop(0x2e, x86_segpfx, rCS, __, __, __, PFX,   NULL),
+  mkop(0x2e, x86_segpfx, rCS, __, __, __, PFX,   "<cs>"),
   mkop(0x2f, x86_das,    __,  __, __, __, __,    "das"),
 
   mkop(0x30, x86_xor,    Eb,  Gb, __, __, MRR,   "xor      %Eb, %Gb"),
@@ -2647,7 +2653,7 @@ opcode_t opix[] = {
   mkop(0x33, x86_xor,    Gv,  Ev, __, __, MRR,   "xor      %Gv, %Ev"),
   mkop(0x34, x86_xor,    rAL, Ib, __,  4, __,    "xor      al, %Ib"),
   mkop(0x35, x86_xor,    rvAX,Iv, __,  4, __,    "xor      %v0, %Iv"),
-  mkop(0x36, x86_segpfx, rSS, __, __, __, PFX,   NULL),
+  mkop(0x36, x86_segpfx, rSS, __, __, __, PFX,   "<ss>"),
   mkop(0x37, x86_aaa,    __,  __, __, __, __,    "aaa"),
   mkop(0x38, x86_cmp,    Eb,  Gb, __, __, MRR,   "cmp      %Eb, %Gb"),
   mkop(0x39, x86_cmp,    Ev,  Gv, __, __, MRR,   "cmp      %Ev, %Gv"),
@@ -2655,7 +2661,7 @@ opcode_t opix[] = {
   mkop(0x3b, x86_cmp,    Gv,  Ev, __, __, MRR,   "cmp      %Gv, %Ev"),
   mkop(0x3c, x86_cmp,    rAL, Ib, __, __, __,    "cmp      al, %Ib"),
   mkop(0x3d, x86_cmp,    rvAX,Iv, __, __, __,    "cmp      %v0, %Iv"),
-  mkop(0x3e, x86_segpfx, rDS, __, __, __, PFX,   NULL),
+  mkop(0x3e, x86_segpfx, rDS, __, __, __, PFX,   "<ds>"),
   mkop(0x3f, x86_aas,    __,  __, __, __, __,    "aas"),
 
   mkop(0x40, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
@@ -2696,18 +2702,18 @@ opcode_t opix[] = {
   mkop(0x61, x86_popa,   __,  __, __, __, __,    "popa"),
   mkop(0x62, __,         __,  __, __, __, __,    NULL),
   mkop(0x63, __,         __,  __, __, __, __,    NULL),
-  mkop(0x64, x86_segpfx, rFS, __, __, __, PFX,   NULL),
-  mkop(0x65, x86_segpfx, rGS, __, __, __, PFX,   NULL),
-  mkop(0x66, x86_osize,  __,  __, __, __, PFX,   NULL),
-  mkop(0x67, x86_asize,  __,  __, __, __, PFX,   NULL),
+  mkop(0x64, x86_segpfx, rFS, __, __, __, PFX,   "<fs>"),
+  mkop(0x65, x86_segpfx, rGS, __, __, __, PFX,   "<gs>"),
+  mkop(0x66, x86_osize,  __,  __, __, __, PFX,   "<osize>"),
+  mkop(0x67, x86_asize,  __,  __, __, __, PFX,   "<asize>"),
   mkop(0x68, x86_push,   Iv,  __, __, __, __,    "push     %Iv"),
   mkop(0x69, x86_imul,   Gv,  Ev, Iv, __, MRR,   "imul     %Gv, %Ev, %Iv"),
   mkop(0x6a, x86_push,   Ib,  __, __, __, __,    "push     %Ib"),
   mkop(0x6b, x86_imul,   Gv,  Ev, Ib, __, MRR,   "imul     %Gv, %Ev, %Ib"),
-  mkop(0x6c, x86_insb,   __,  __, __, __, __,    "insb"),
-  mkop(0x6d, x86_insw,   __,  __, __, __, __,    "insw"),
-  mkop(0x6e, x86_outsb,  __,  __, __, __, __,    "outsb"),
-  mkop(0x6e, x86_outsw,  __,  __, __, __, __,    "outsw"),
+  mkop(0x6c, x86_ins,    Yb,  rDX,__, __, __,    "insb"),
+  mkop(0x6d, x86_ins,    Yv,  rDX,__, __, __,    "insw"),
+  mkop(0x6e, x86_outs,   rDX, Xb, __, __, __,    "outsb"),
+  mkop(0x6e, x86_outs,   rDX, Xv, __, __, __,    "outsw"),
 
   mkop(0x70, x86_jo,     Jb,  __, __, __, __,    "jo       %Jb"),
   mkop(0x71, x86_jno,    Jb,  __, __, __, __,    "jno      %Jb"),
@@ -2726,12 +2732,12 @@ opcode_t opix[] = {
   mkop(0x7e, x86_jle,    Jb,  __, __, __, __,    "jle      %Jb"),
   mkop(0x7f, x86_jg,     Jb,  __, __, __, __,    "jg       %Jb"),
 
-  mkop(0x80, x86_grp,    Eb,  Iv, __, __, GRP1,  "%grp1    %Eb, %Ib"),
-  mkop(0x81, x86_grp,    Ev,  Iv, __, __, GRP1,  "%grp1    %Ev, %Iv"),
-  mkop(0x82, x86_grp,    Eb,  Ib, __, __, GRP1,  "%grp1    %Eb, %Ib"),
-  mkop(0x83, x86_grp,    Ev,  Sb, __, __, GRP1,  "%grp1    %Ev, %Sb"),
-  mkop(0x84, x86_test,   Eb,  Gb, __, __, MRR,   "test     %Eb, %Gb"),
-  mkop(0x85, x86_test,   Ev,  Gv, __, __, MRR,   "test     %Ev, %Gv"),
+  mkop(0x80, GRP1,       Eb,  Ib, __, __, GRP1,  "%grp1    %Eb, %Ib"),
+  mkop(0x81, GRP1,       Ev,  Iv, __, __, GRP1,  "%grp1    %Ev, %Iv"),
+  mkop(0x82, GRP1,       Eb,  Ib, __, __, GRP1,  "%grp1    %Eb, %Ib"),
+  mkop(0x83, GRP1,       Ev,  Sb, __, __, GRP1,  "%grp1    %Ev, %Sb"),
+  mkop(0x84, x86_test,   Gb,  Eb, __, __, MRR,   "test     %Gb, %Eb"),
+  mkop(0x85, x86_test,   Gv,  Ev, __, __, MRR,   "test     %Gv, %Ev"),
   mkop(0x86, x86_xchg,   Gb,  Eb, __, __, MRR,   "xchg     %Gb, %Eb"),
   mkop(0x87, x86_xchg,   Gv,  Ev, __, __, MRR,   "xchg     %Gv, %Ev"),
   mkop(0x88, x86_mov,    Eb,  Gb, __, __, MRR,   "mov      %Eb, %Gb"),
@@ -2794,12 +2800,12 @@ opcode_t opix[] = {
   mkop(0xbe, x86_mov,    gv,  Iv, __,  4, __,    "mov      %gv, %Iv"),
   mkop(0xbf, x86_mov,    gv,  Iv, __,  4, __,    "mov      %gv, %Iv"),
 
-  mkop(0xc0, x86_grp,    Eb,  Ib, __, __, GRP2,  "%grp2    %Eb, %Ib"),
-  mkop(0xc1, x86_grp,    Ev,  Ib, __, __, GRP2,  "%grp2    %Ev, %Ib"),
+  mkop(0xc0, GRP2,       Eb,  Ib, __, __, GRP2,  "%grp2    %Eb, %Ib"),
+  mkop(0xc1, GRP2,       Ev,  Ib, __, __, GRP2,  "%grp2    %Ev, %Ib"),
   mkop(0xc2, x86_ret,    Iw,  __, __, 24, __,    "ret      %Iw"),
   mkop(0xc3, x86_ret,    __,  __, __, 20, __,    "ret"),
-  mkop(0xc4, x86_les,    Gv,  Mp, rES,__, MRR,   "les      %Gv, %Mp"),
-  mkop(0xc5, x86_lds,    Gv,  Mp, rDS,__, MRR,   "lds      %Gv, %Mp"),
+  mkop(0xc4, x86_les,    Gv,  Mp, __, __, MRR,   "les      %Gv, %Mp"),
+  mkop(0xc5, x86_lds,    Gv,  Mp, __, __, MRR,   "lds      %Gv, %Mp"),
   mkop(0xc6, x86_mov,    Eb,  Ib, __, __, MRR,   "mov      %Eb, %Ib"),
   mkop(0xc7, x86_mov,    Ev,  Iv, __, __, MRR,   "mov      %Ev, %Iv"),
   mkop(0xc8, x86_enter,  Iw,  Ib, __, __, __,    "enter    %Iw, %Ib"),
@@ -2811,10 +2817,10 @@ opcode_t opix[] = {
   mkop(0xce, x86_into,   __,  __, __, __, __,    "into"),
   mkop(0xcf, x86_iret,   __,  __, __, 44, __,    "iret"),
 
-  mkop(0xd0, x86_grp,    Eb,  i1, __, __, GRP2,  "%grp2,   %Eb, 1"),
-  mkop(0xd1, x86_grp,    Ev,  i1, __, __, GRP2,  "%grp2,   %Ev, 1"),
-  mkop(0xd2, x86_grp,    Eb,  rCL,__, __, GRP2,  "%grp2,   %Eb, cl"),
-  mkop(0xd3, x86_grp,    Eb,  rCL,__, __, GRP2,  "%grp2,   %Ev, cl"),
+  mkop(0xd0, GRP2,       Eb,  i1, __, __, GRP2,  "%grp2,   %Eb, 1"),
+  mkop(0xd1, GRP2,       Ev,  i1, __, __, GRP2,  "%grp2,   %Ev, 1"),
+  mkop(0xd2, GRP2,       Eb,  rCL,__, __, GRP2,  "%grp2,   %Eb, cl"),
+  mkop(0xd3, GRP2,       Ev,  rCL,__, __, GRP2,  "%grp2,   %Ev, cl"),
   mkop(0xd4, x86_aam,    Ib,  __, __, 83, __,    "aam      %Ib"),
   mkop(0xd5, x86_aad,    Ib,  __, __, 60, __,    "aad      %Ib"),
   mkop(0xd6, __,         __,  __, __, __, __,    NULL),
@@ -2845,90 +2851,27 @@ opcode_t opix[] = {
   mkop(0xee, x86_out,    rDX, rAL,__, 12, __,    "out      dx, al"),
   mkop(0xef, x86_out,    rDX,rvAX,__, 12, __,    "out      dx, %v0"),
 
-  mkop(0xf0, x86_lock,   __,  __, __,  2, PFX,   "lock"),
+  mkop(0xf0, x86_lock,  0x1,  __, __,  2, PFX,   "lock"),
   mkop(0xf1, __,         __,  __, __, __, __,    NULL),
   mkop(0xf2, x86_repnz, 0x2,  __, __, __, PFX,   "repnz"),
   mkop(0xf3, x86_repz,  0x4,  __, __, __, PFX,   "repz"),
   mkop(0xf4, x86_hlt,    __,  __, __,  2, __,    "hlt"),
   mkop(0xf5, x86_cmc,    __,  __, __,  2, __,    "cmc"),
-  mkop(0xf6, x86_grp,    Eb,  __, __, __, GRP3,  "%grp3    %Eb"),
-  mkop(0xf7, x86_grp,    Ev,  __, __, __, GRP3,  "%grp3    %Ev"),
+  mkop(0xf6, GRP3,       Eb,  __, __, __, GRP3,  "%grp3    %Eb"),
+  mkop(0xf7, GRP3,       Ev,  __, __, __, GRP3,  "%grp3    %Ev"),
   mkop(0xf8, x86_clc,    0x0, __, __,  2, __,    "clc"),
   mkop(0xf9, x86_stc,    0x1, __, __,  2, __,    "stc"),
   mkop(0xfa, x86_cli,    0x0, __, __,  2, __,    "cli"),
   mkop(0xfb, x86_sti,    0x1, __, __,  2, __,    "sti"),
   mkop(0xfc, x86_cld,    0x0, __, __,  2, __,    "cld"),
   mkop(0xfd, x86_std,    0x1, __, __,  2, __,    "std"),
-  mkop(0xfe, x86_grp,    Eb,  __, __, __, GRP4,  "%grp4    %Eb"),
-  mkop(0xff, x86_grp,    Ev,  __, __, __, GRP5,  "%grp5    %Ev"),
+  mkop(0xfe, GRP4,       Eb,  __, __, __, GRP4,  "%grp4    %Eb"),
+  mkop(0xff, GRP5,       Ev,  __, __, __, GRP5,  "%grp5    %Ev"),
 };
 
-opcode_t optbl[] = {
-  /* 00 */
-  m(add, Eb, Gb),   m(add, Ev, Gv),   m(add, Gb, Eb),   m(add, Gv, Ev),   _(add, rAL, Ib),  _(add, rvAX, Iv), _(push, rES),     _(pop, rES),
-  m(or,  Eb, Gb),   m(or,  Ev, Gv),   m(or,  Gb, Eb),   m(or,  Gv, Ev),   _(or,  rAL, Ib),  _(or,  rvAX, Iv), _(push, rCS),     _xxx,
-  m(adc, Eb, Gb),   m(adc, Ev, Gv),   m(adc, Gb, Eb),   m(adc, Gv, Ev),   _(adc, rAL, Ib),  _(adc, rvAX, Iv), _(push, rSS),     _(pop, rSS),
-  m(sbb, Eb, Gb),   m(sbb, Ev, Gv),   m(sbb, Gb, Eb),   m(sbb, Gv, Ev),   _(sbb, rAL, Ib),  _(sbb, rvAX, Iv), _(push, rDS),     _(pop, rDS),
-
-  /* 20 */
-  m(and, Eb, Gb),   m(and, Ev, Gv),   m(and, Gb, Eb),   m(and, Gv, Ev),   _(and, rAL, Ib),  _(and, rvAX, Iv), p(seg, rES),      _(daa),
-  m(sub, Eb, Gb),   m(sub, Ev, Gv),   m(sub, Gb, Eb),   m(sub, Gv, Ev),   _(sub, rAL, Ib),  _(sub, rvAX, Iv), p(seg, rCS),      _(das),
-  m(xor, Eb, Gb),   m(xor, Ev, Gv),   m(xor, Gb, Eb),   m(xor, Gv, Ev),   _(xor, rAL, Ib),  _(xor, rvAX, Iv), p(seg, rSS),      _(aaa),
-  m(cmp, Eb, Gb),   m(cmp, Ev, Gv),   m(cmp, Gb, Eb),   m(cmp, Gv, Ev),   _(cmp, rAL, Ib),  _(cmp, rvAX, Iv), p(seg, rDS),      _(aas),
-
-  /* 40 */
-  _(inc, gv),       _(inc, gv),       _(inc, gv),       _(inc, gv),       _(inc, gv),       _(inc, gv),       _(inc, gv),       _(inc, gv),  
-  _(dec, gv),       _(dec, gv),       _(dec, gv),       _(dec, gv),       _(dec, gv),       _(dec, gv),       _(dec, gv),       _(dec, gv),  
-  _(push,gv),       _(push,gv),       _(push,gv),       _(push,gv),       _(push,gv),       _(push,gv),       _(push,gv),       _(push,gv),  
-  _(pop, gv),       _(pop, gv),       _(pop, gv),       _(pop, gv),       _(pop, gv),       _(pop, gv),       _(pop, gv),       _(pop, gv),  
-
-  /* 60 */
-  _(pusha),         _(popa),          _xxx,             _xxx,             p(seg,rFS),       _xxx,             _xxx,             _xxx,
-  _(push,Iv),       _(imul,Gv,Ev,Iv), _(push, Ib),      _(imul,Gv,Ev,Ib), _xxx,             _xxx,             _xxx,             _xxx,
-  _(jo, Jb),        _(jno, Jb),       _(jb, Jb),        _(jnb, Jb),       _(jz, Jb),        _(jnz, Jb),       _(jbe, Jb),       _(ja, Jb),
-  _(js, Jb),        _(jns, Jb),       _(jpe, Jb),       _(jpo, Jb),       _(jl, Jb),        _(jge, Jb),       _(jle, Jb),       _(jg, Jb),
-  
-  /* 80 */
-  g(GRP1, Eb, Ib),  g(GRP1, Ev, Iv),  g(GRP1, Eb, Ib),  g(GRP1, Ev, Sb),  m(test, Eb, Gb),  m(test, Gv, Ev),  m(xchg, Gb, Eb),  m(xchg, Gv, Ev),
-  m(mov,  Eb, Gb),  m(mov,  Ev, Gv),  m(mov,  Gb, Eb),  m(mov,  Gv, Ev),  m(mov,  Ew, Sw),  m(lea,  Gv, Mp),  m(mov,  Sw, Ew),  m(pop,  Ev),
-  _(nop),           _(xchg,rvAX,gv),  _(xchg,rvAX,gv),  _(xchg,rvAX,gv),  _(xchg,rvAX,gv),  _(xchg,rvAX,gv),  _(xchg,rvAX,gv),  _(xchg,rvAX,gv),
-  _(cbw),           _(cwd),           _(callf,Ap),      _(wait),          _(pushf),         _(popf),          _(sahf),          _(lahf),
-  
-  /* a0 */
-  _(mov,  rAL, Ob), _(mov,  rvAX, Ov),_(mov, Ob, rAL),  _(mov, Ov, rvAX), _(movsb, Yb, Xb), _(movsw, Yv, Xv), _(cmpsb, Yb, Xb), _(cmpsw, Yv, Xv),
-  _(test, rAL, Ib), _(test, rvAX, Iv),_(stosb, Yb, rAL),_(stosw, Yv,rvAX),_(lodsb,rAL, Xb), _(lodsw, rvAX, Xv),_(scasb, rAL, Yb),_(scasw, rvAX, Yv),
-  _(mov,  gb,  Ib), _(mov,  gb,   Ib),_(mov,  gb,   Ib),_(mov,  gb,   Ib),_(mov,  gb,   Ib),_(mov,  gb,   Ib),_(mov,  gb,   Ib),_(mov,  gb,   Ib),
-  _(mov,  gv,  Iv), _(mov,  gv,   Iv),_(mov,  gv,   Iv),_(mov,  gv,   Iv),_(mov,  gv,   Iv),_(mov,  gv,   Iv),_(mov,  gv,   Iv),_(mov,  gv,   Iv),
-  
-  /* c0 */
-  g(GRP2, Eb, Ib),  g(GRP2, Ev, Ib),  _(ret, Iw),       _(ret),           m(les, Gv, Mp),   m(lds, Gv, Mp),   m(mov,  Eb,   Ib),m(mov,  Ev,   Iv),
-  _(enter,Iw, Ib),  _(leave),         _(retf,Iw),       _(retf),          _(int, i3),       _(int, Ib),       _(into),          _(iret),
-  g(GRP2, Eb, i1),  g(GRP2, Ev, i1),  g(GRP2, Eb, rCL), g(GRP2, Ev, rCL), _(aam, Ib),       _(aad, Ib),       _xxx,             _(xlat),
-  _xxx,             _xxx,             _xxx,             _xxx,             _xxx,             _xxx,             _xxx,             _xxx,
-  
-  /* e0 */
-  _(loopnz, Jb),    _(loopz, Jb),     _(loop, Jb),      _(jcxz, Jb),      _(in, rAL, Ib),   _(in, rvAX, Ib),  _(out, Ib, rAL),  _(out, Ib, rvAX),
-  _(call,   Jv),    _(jmp,   Jv),     _(jmpf, Ap),      _(jmp,  Jb),      _(in, rAL, rDX),  _(in, rvAX, rDX), _(out, rDX, rAL), _(out, rDX, rvAX),
-  p(lock,   0x01),  _xxx,             p(repnz, 0x02),   p(repz, 0x04),    _(hlt),           _(cmc),           g(GRP3, Eb),      g(GRP3, Ev),
-  _(clc),           _(stc,1),          _(cli),           _(sti,1),          _(cld),           _(std,1),           g(GRP4, Eb),      g(GRP5, Ev),
-};
 
 void showop(opcode_t *op) {
   printf("%.4x: %.8x %.8x %.8x %s\n", op->opfn, op->arg0, op->arg1, op->arg2, op->mnem);
-}
-
-void init2()
-{
-  for (int i = 0; i < 256; i++) {
-    if (opix[i].opfn != optbl[i].opfn ||
-	opix[i].arg0 != optbl[i].arg0 ||
-	opix[i].arg1 != optbl[i].arg1 ||
-	opix[i].arg2 != optbl[i].arg2) {
-      printf("%.2x: mismatch\n", i);
-      showop(&opix[i]);
-      showop(&optbl[i]);
-    }
-  }
 }
 
 #define PFX_LOCK   0x01
@@ -2944,7 +2887,6 @@ void init2()
 
 /* Return condition codes */
 constexpr bool x86_testcond(uint8_t op) {
-#if 1
   const bool c = (op & 1) == 0;
 
   switch(op & 0xE) {
@@ -2957,26 +2899,6 @@ constexpr bool x86_testcond(uint8_t op) {
   case 0xc: return (Sf != Of) == c;         // jl/jge
   case 0xe: return (Zf || (Sf != Of)) == c; // jle/jg
   }
-#else
-  switch (op & 0xF) {
-  case 0x0: return Of;                    // jo
-  case 0x1: return !Of;                   // jno
-  case 0x2: return Cf;                    // jb
-  case 0x3: return !Cf;                   // jnb
-  case 0x4: return Zf;                    // jz
-  case 0x5: return !Zf;                   // jnz
-  case 0x6: return Cf || Zf;              // jbe
-  case 0x7: return !Cf && !Zf;            // ja
-  case 0x8: return Sf;                    // js
-  case 0x9: return !Sf;                   // jns
-  case 0xa: return Pf;                    // jpe
-  case 0xb: return !Pf;                   // jpo
-  case 0xc: return Sf != Of;              // jl
-  case 0xd: return Sf == Of;              // jge
-  case 0xe: return (Zf || (Sf != Of));    // jle
-  case 0xf: return (!Zf && (Sf == Of));   // jg
-  }
-#endif
   return false;
 }
 
@@ -3013,6 +2935,14 @@ arg_t getarg(uint32_t arg, uint32_t op)
     mrr_base = CSIP;
     PC += 4;
     return TYPE_EAMEM+SIZE_PTR;
+  }
+  // return embedded integer
+  // tttttttt|ssssssss|vvvvvvvvvvvvvvvv
+  if (arg == Ib) {
+    return TYPE_IMM+SIZE_EMB+cpu_fetch8();
+  }
+  if (arg == Iw) {
+    return TYPE_IMM+SIZE_EMB+cpu_fetch16();
   }
   switch (arg & TYPE_MASK) {
   case TYPE_EMBREG:
@@ -3085,7 +3015,8 @@ static uint32_t x86_get(const arg_t& arg)
     return tmp;
   case Iw:
     return cpu_fetch16();
-  case i1: case i3:
+  case TYPE_IMM+SIZE_EMB+0x0000 ... TYPE_IMM+SIZE_EMB+0xffff:
+    // embedded immediate
     return arg & VAL_MASK;
   case rAL ... rBH:
     return *bregs[arg & 7];
@@ -3396,7 +3327,7 @@ void x86_mathop(int op, const arg_t& arg0, const arg_t& arg1)
   case x86_mul:
     if ((arg0 & SIZE_MASK) == SIZE_BYTE) {
       // ax = al * eb
-      mul8(rAX, x86_get(rAL), a, 0xFF);
+      mul8(rAX, AL, a, 0xFF);
     }
     else {
       // vdx:vax = vax * ev
@@ -3407,7 +3338,7 @@ void x86_mathop(int op, const arg_t& arg0, const arg_t& arg1)
     // rvAX   = Eb, rAL
     // rvDAX  = Ev, rvAX
     if ((arg0 & SIZE_MASK) == SIZE_BYTE) {
-      imul(rAX, (int8_t)x86_get(rAL), (int8_t)a, SIZE_BYTE);
+      imul(rAX, (int8_t)AL, (int8_t)a, SIZE_BYTE);
     }
     else {
       // vdx:vax = vax * ev
@@ -3420,7 +3351,7 @@ void x86_mathop(int op, const arg_t& arg0, const arg_t& arg1)
   case x86_div:
     if ((arg0 & SIZE_MASK) == SIZE_BYTE) {
       // ah:al = div(AX, Eb)
-      div8(rAL, rAH, x86_get(rAX), a, 0xFF);
+      div8(rAL, rAH, AX, a, 0xFF);
     }
     else {
       // dx:ax = div(DAX, Ev)
@@ -3430,7 +3361,7 @@ void x86_mathop(int op, const arg_t& arg0, const arg_t& arg1)
   case x86_idiv:
     if ((arg0 & SIZE_MASK) == SIZE_BYTE) {
       // ah:al = b:ax / a:Eb
-      idiv8(rAL, rAH, (int32_t)(int16_t)x86_get(rAX), (int32_t)(int16_t)(int8_t)a, 0x7F);
+      idiv8(rAL, rAH, (int32_t)(int16_t)AX, (int32_t)(int16_t)(int8_t)a, 0x7F);
     }
     else {
       // dx:ax = dx:ax / Ev
@@ -3595,7 +3526,7 @@ bool x86_irq(bool test, int irq)
   If = false;
   Tf = false;
   
-  npc = cpu_read16(IDT_BASE + irq * 4);
+  npc = cpu_readv(IDT_BASE + irq * 4);
   ncs = cpu_read16(IDT_BASE + irq * 4 + 2);
   x86_setpc(true, ncs, npc);
   return true;
@@ -3641,12 +3572,12 @@ int x86_disarg(char *dst, uint32_t arg)
 const char *x86_dis(uint8_t op, uint32_t a0, uint32_t a1, uint32_t a2)
 {
   const int ggg = mrr_ggg(mrr);
-  opcode_t *opc = &optbl[op];
+  opcode_t opc = opix[op];
   static char dstr[64];
   const char *src;
   char *dst = dstr;
 
-  src = opc->mnem;
+  src = opc.mnem;
   if (pfx == PFX_REPNZ) {
     dst += sprintf(dst, "repnz ");
   }
@@ -3697,7 +3628,7 @@ static void x86_loadptr(arg_t seg, arg_t ofs)
 
   /* Size=16/32 */
   x86_set(ofs, cpu_read16(addr + 0));
-  x86_set(seg, cpu_read16(addr + 2));
+  x86_set(seg, cpu_readv(addr + 2));
 }
 
 /* Execute an opcode with its arguments:
@@ -3763,7 +3694,7 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
     x86_setpc(true, CS, tmp);
     break;
   case x86_callf: // call Ap/Mp
-    tmp = cpu_read16(mrr_base);
+    tmp = cpu_readv(mrr_base);
     ncs = cpu_read16(mrr_base + 2);
     cpu_push16(CS);
     cpu_push16(PC);
@@ -3781,8 +3712,9 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
     break;
   case x86_jmpf: // jmp Ap/Mp
     If = false;
-    tmp = cpu_read16(mrr_base);
+    tmp = cpu_readv(mrr_base);
     ncs = cpu_read16(mrr_base + 2);
+    printf("jmpf: %.4x %.4x\n", ncs, tmp);
     x86_setpc(true, ncs, tmp);
     break;
   case x86_jcxz: // jcxz Jb
@@ -3826,10 +3758,10 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
     io_write(x86_get(arg0), x86_get(arg1), arg1);
     break;
   case x86_sahf: // sahf
-    cpu_setflags((eflags & 0xFF00) | x86_get(rAH));
+    cpu_setflags((eflags & 0xFF00) | AH);
     break;
   case x86_lahf: // lahf
-    x86_set(rAH, cpu_getflags());
+    AH = cpu_getflags();
     break;
   case x86_rol: // grp2
   case x86_ror:
@@ -3879,7 +3811,7 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
     x86_strop2(x86_cmp, arg0, arg1);
     break;
   case x86_cbw: // cbw
-    x86_set(rAX, (int8_t)x86_get(rAL));
+    AX = (int8_t)AL;
     break;
   case x86_cwd: // cwd ax -> dx:ax
     tmp = (int16_t)AX;
@@ -3905,8 +3837,8 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
     x86_irq(Of, 4);
     break;
   case x86_xlat: // xlat
-    tmp = segbase(rDS, BX + x86_get(rAL), segpfx);
-    x86_set(rAL, cpu_read8(tmp));
+    tmp = segbase(rDS, BX + AL, segpfx);
+    AL = cpu_read8(tmp);
     break;
   case x86_lea: // lea
     x86_set(arg0, mrr_base - mrr_seg);
@@ -3960,7 +3892,7 @@ static void cpu_vm()
   
   op = cpu_fetch8();
   if (op == 0x00) {
-    zprintf("VM:WRITECH: '%c'\n", x86_get(rAL));
+    zprintf("VM:WRITECH: '%c'\n", AL);
   }
   else if (op == 0x01) {
     struct timespec ts;
@@ -3984,27 +3916,23 @@ static void cpu_vm()
     sssp = segbase(rSS, SP);
 
     zprintf("VM:DISKREAD: disk:%.2x sector:%.4x:%.4x size:%.4x %.4x:%.4x = [%.8x], %.8x\n",
-	    x86_get(rDL),   // disk
-	    x86_get(rSI),   // sector
-	    x86_get(rBP),
-	    x86_get(rAX),   // size
+	    DL,   // disk
+	    SI,   // sector
+	    BP,
+	    AX,   // size
 	    ES, BX, base, sssp);
     memcpy(&cpu.ram[base], &diskdata[BP * 512], AX);
 #if 0
     hexdump(&cpu.ram[base], AX);
 #endif
-    x86_set(rAL, 0);
+    AL = 0;
   }
   else if (op == 0x03) {
     base = segbase(rES, BX);
     zprintf("VM:DISKWRITE: disk:%.2x sector:%.4x:%.4x size:%.4x %.4x:%.4x = %.8x\n",
-	    x86_get(rDL),
-	    x86_get(rSI),
-	    x86_get(rBP),
-	    x86_get(rAX),
-	    ES, BX, base);
+	    DL, SI, BP, AX, ES, BX, base);
     memcpy(&diskdata[BP * 512], &cpu.ram[base], AX);
-    x86_set(rAL, 0); 
+    AL = 0;
   }
 }
 
@@ -4040,32 +3968,20 @@ int cpu_step()
     }
 
     /* copy opcode */
-#ifdef OPIX
     opc = opix[op];
-#else
-    opc = optbl[op];
-#endif
     if (!opc.mnem) {
       zprintf("ACK: %.2x\n", op);
       assert(opc.mnem);
     }
 
     /* get mrr byte and opfn */
-#ifdef OPIX
-    if (opc.flag & FLAG_MRR) {
+    if (opc.flag & MRR) {
       mrr = cpu_fetch8();
-      if ((opc.flag & GRP) != 0) {
+      if ((opc.flag & GRP) != MRR) {
 	opc.opfn += mrr_ggg(mrr);
       }
     }
-#else
-    if (opc.flag & FLAG_MRR) {
-      mrr = cpu_fetch8();
-      if ((opc.flag & FLAG_GRP) == FLAG_GRP) {
-	opc.opfn += mrr_ggg(mrr);
-      }
-    }
-#endif
+
     /* Special cases */
     switch ((op << 8) + opc.opfn) {
     case 0xf600 + x86_test:
@@ -4077,17 +3993,14 @@ int cpu_step()
     }
 
     /* Get prefix */
-#ifdef OPIXx
     if ((opc.flag & PFX) == 0)
       break;
-#else
-    if ((opc.flag & FLAG_PFX) == 0)
-      break;
-#endif
     if ((opc.arg0 & TYPE_MASK) == TYPE_REG) {
+      // segment prefix
       segpfx = opc.arg0;
     }
     else {
+      // other prefix. lock, repz, repnz
       pfx |= opc.arg0;
     }
   }
@@ -4211,8 +4124,6 @@ void dumpcfg(uint8_t *data, size_t size)
       reset = false;
     }
     start = off;
-
-    
     do {
       op = data[off++];
       opc = opix[op];
@@ -4297,9 +4208,6 @@ void dumpcfg(uint8_t *data, size_t size)
   stk->showstk(64);
 }
 
-Timer framectr;
-void audio_tick();
-
 void runme()
 {
   int nc;
@@ -4342,7 +4250,7 @@ void testx()
 void cpu_shutdown(void)
 {
   for (int i = 0; i < 256; i++) {
-    zprintf("%.2x: %10d %s\n", i, opcnt[i], optbl[i].mnem);
+    zprintf("%.2x: %10d %s\n", i, opcnt[i], opix[i].mnem);
   }
 }
 
@@ -4366,7 +4274,6 @@ int main(int argc, char *argv[])
   
   diskdata = loadrom("pcbios/disk01.img", disksize);
 
-  init2();
   setdmp(zprintf);
 
   for (int i = 0xf0000; i <= 0xfffff; i++) {
