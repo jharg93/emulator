@@ -397,8 +397,8 @@ void snes::showdma(int enabled, bool isHdma)
       printf("\n");
       break;
     }
-    printf("  SRC :  %.6lx\n", sr24(base + 2));
-    printf("  LENGTH:%.6lx\n", sr24(base + 5));
+    printf("  SRC :  %.6lx\n", (unsigned long)sr24(base + 2));
+    printf("  LENGTH:%.6lx\n", (unsigned long)sr24(base + 5));
     if ((dmp & 0x80) == 0 && !isHdma) {
       /* CPU->IO */
       xfer.src   = sr24(base + 2);             // A1Tx

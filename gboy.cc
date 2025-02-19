@@ -719,6 +719,7 @@ static int mbcram(void *arg, uint32_t offset, int mode, uint8_t &data)
   else {
     banksyio(&gb->ram1, offset, mode, data);
   }
+  return 0;
 }
 
 static int mbcramen(void *arg, uint32_t offset, int mode, uint8_t &data)
@@ -730,6 +731,7 @@ static int mbcramen(void *arg, uint32_t offset, int mode, uint8_t &data)
     gb->ram_enabled = true;
   else if ((data & 0xF) == 0x00)
     gb->ram_enabled = false;
+  return 0;
 }
 
 /*===========================*
@@ -825,6 +827,7 @@ static int mbc2ram(void *arg, uint32_t offset, int mode, uint8_t &data)
     gb->cartram[offset] = data;
   }
   printf("rram: %c %.4x %x\n", mode, offset, data);
+  return 0;
 }
 
 /*
@@ -1345,8 +1348,6 @@ void gameboy::drawline(int y)
   
   /* Draw background/window */
   for (int x = 0; x < 160; x++) {
-    bgmap *bgx;
-    
     uint8_t *map, *set;
     /* Background/Window enable or Sprite priority in CGB */
     if (win.en && y >= r_WY && x >= wx) {

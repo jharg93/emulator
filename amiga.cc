@@ -205,7 +205,7 @@ constexpr const char *bits_irqname[] = {
   "master enable",
 };
 
-constexpr const char *bits_dmaconr[] = {
+static const char *bits_dmaconr[] = {
   "aud0",     // 0x0001
   "aud1",     // 0x0002
   "aud2",     // 0x0004
@@ -2221,7 +2221,6 @@ void amiga::renderbg(int y, int count, int dmapos)
 }
 
 int amiga::bpdma(int mode) {
-  int n = (mode >> 1) & 0x7;
   if (vPos >= screen.y0 && vPos < screen.y1) {
     if (mode == bpl1 || mode == bpl1h) {
       if (totdma++ > wdma) {
@@ -2747,8 +2746,8 @@ uint32_t amiga::runcop(uint32_t pc, int hpos, int vpos)
   code0 = cpu_read16(pc + 0);
   code1 = cpu_read16(pc + 2);
   if ((code0 & 1) == 0) {
-    uint32_t cr = code0 + 0xdff000;
 #if 0
+    uint32_t cr = code0 + 0xdff000;
     printf("%.4x %.4x/%.4x copper move: %.8x[%s] = %.4x\n",
 	   cpos, code0, code1, cr, iorname(cr), code1);
 #endif

@@ -27,7 +27,7 @@ static uint8_t *_emit(uint8_t *src, int nb, ...) {
   va_list ap;
   va_start(ap, nb);
   while (nb--) {
-    *src++ = va_arg(ap, uint8_t);
+    *src++ = va_arg(ap, int);
   }
   return src;
 }
@@ -394,7 +394,7 @@ struct cpu {
   void bgtzl(val_t &Rt, val_t Rs, val_t src2) {
   };
   void j(val_t &Rt, val_t Rs, val_t src2) {
-    printf("%.8x J: %.8x %.8x\n", PC, src2, j26(src2));
+    printf("%.8x J: %.8x %.8x\n", (int)PC, (int)src2, j26(src2));
     setpc(true, j26(src2));
   }
   void jal(val_t &Rt, val_t Rs, val_t src2) {
@@ -670,6 +670,7 @@ uint32_t RSP_CP0::rdwr(uint32_t addr, uint32_t value, bool write) {
     rundma(rsp_mem_addr, rsp_dram_addr, (value & 0xFF8) + 1);
     break;
   }
+  return 0;
 }
 
 /*================================================================*
@@ -829,6 +830,7 @@ uint32_t PI::rdwr(uint32_t addr, uint32_t value, bool write) {
     };
     break;
   }
+  return 0;
 }
 
 /*================================================================*
@@ -875,6 +877,7 @@ uint32_t SI::rdwr(uint32_t addr, uint32_t value, bool write) {
     clear_irq(1);
     break;
   }
+  return 0;
 }
 
 struct RI {
@@ -994,7 +997,7 @@ const char *dis(const uint32_t op, const char *mnem)
     if (replace(&mnem, "%Rt", &d, regname[rt]) ||
 	replace(&mnem, "%Rs", &d, regname[rs]) ||
 	replace(&mnem, "%Rd", &d, regname[rd]) ||
-	replace(&mnem, "%sa", &d, "%d", sa) |\
+	replace(&mnem, "%sa", &d, "%d", sa) ||
 	replace(&mnem, "%i", &d, "0x%x", (uint16_t)op)) {
       continue;
     }
@@ -1287,7 +1290,7 @@ void cpu::exec()
   }
   trace = 0;
   if (trace) {
-    printf("\n%.8x ==== op: %.8x[%s] %.4x %.2x %.2x\n", PC, op, binop(op), opfn, rt, rs);
+    printf("\n%.8x ==== op: %.8x[%s] %.4x %.2x %.2x\n", (int)PC, op, binop(op), opfn, rt, rs);
     showregs();
   }
   PC += 4;
@@ -1296,7 +1299,6 @@ void cpu::exec()
   bool found = false;
   auto e = getop(opfn);
   if (e && e->fn) {
-    auto fn = e->fn;
     dis(op, e->dis);
     switch(e->oparg) {
     case RtRsS16:
@@ -1402,7 +1404,7 @@ void cpu::exec()
 
 
   default:
-    printf("\n%.8x ==== op: %.8x %.4x %.2x %.2x\n", PC, op, opfn, rt, rs);
+    printf("\n%.8x ==== op: %.8x %.4x %.2x %.2x\n", (int)PC, op, opfn, rt, rs);
     showregs();
     vi.show();
   }
@@ -1465,7 +1467,6 @@ void init(uint8_t *rom, size_t romsz, uint64_t pc)
   Screen *scr;
   uint32_t cycles = 0;
   int frame = 0;
-  int x, y;
   
   //dumpcfg(rom, romsz, 0x1000);
 
@@ -1513,7 +1514,7 @@ int main(int argc, char *argv[])
   }
   /* Make sure buffer is power of 2 */
   hdr = (RomHeader *)rom;
-  printf("romsz: %x %x '%.20s'\n", romsz, *(uint32_t *)rom, hdr->image_name);
+  printf("romsz: %x %x '%.20s'\n", (int)romsz, *(uint32_t *)rom, hdr->image_name);
   printf("PC: %.8x %.2x\n", get32be(&hdr->program_counter), rom[0]);
   printf("CRC: %.8x\n", crc32(&rom[0x40], 0x1000 - 0x40));
   init(rom, romsz, get32be(&hdr->program_counter));

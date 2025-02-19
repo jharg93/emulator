@@ -212,8 +212,6 @@ int appleii::io(void *arg, uint32_t addr, int mode, iodata_t&io)
 }
 
 void appleii::init(const char *file, int romoff) {
-  size_t fsz;
-  
   bus_t::init(0xFFFF);
   ram = new uint8_t[64 * 1024]{0};
   rom = loadrom(file, romsz);
@@ -262,7 +260,6 @@ const uint16_t txt_off[] = {
 void appleii::drawtextline(uint8_t *vidram, int row)
 {
   uint8_t ch, bg, fg;
-  static int bgc;
 
   for (int i = 0; i < 40; i++) {
     ch = *vidram++;
@@ -405,12 +402,10 @@ void appleii::drawhires(uint8_t *vidmem)
 int kk = 0x80;
 void appleii::run()
 {
-  int cycs;
-
   cpu_reset(0);
   for(;;) {
     trace = 0;
-    cycs = cpu_step();
+    cpu_step();
 
     if (crtc.tick()) {
       printf("-- frame: %d\n", frame++);
@@ -463,8 +458,6 @@ void flogger(int lvl, const char *fmt, ...)
 
 int main(int argc, char *argv[])
 {
-  size_t fsz;
-  
   sys.init("roms/APPLE2.ROM", 0x2000);
   sys.run();
 }

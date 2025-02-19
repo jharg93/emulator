@@ -173,7 +173,7 @@ struct atari : public bus_t, public device_t {
   void tick();
   void draw();
   void drawchar(uint16_t base, int x, int y, int flag, int fg, int bg);
-  void init(const char *romname, const char *cartname);
+  void xl_init(const char *romname, const char *cartname);
 
   void mkbank(int n, int *pb, int start, int size);
   void setbank(int bk, int n) {
@@ -280,6 +280,7 @@ int rwset(void *arg, uint32_t addr, int mode, iodata_t& io)
   if (mode == 'w') {
     sys.setbank(0, (io & 0x3));
   };
+  return 0;
 }
 
 /* d000.d7ff io.read
@@ -327,7 +328,6 @@ void atari::drawchar(uint16_t base, int x, int y, int dd, int fg, int bg)
 void atari::draw()
 {
   int x = 0, y = 0;
-  int addr = 0xe000;
   int flag = 2;
   
   printf("-- frame: %d\n", frame);
@@ -371,7 +371,7 @@ void atari::mkbank(int n, int *ibank, int start, int size) {
   };
 }
 
-void atari::init(const char *rom_file, const char *cart_file)
+void atari::xl_init(const char *rom_file, const char *cart_file)
 {
   palclr p[129] = { 0 };
   int cartType = 0;
@@ -396,7 +396,7 @@ void atari::init(const char *rom_file, const char *cart_file)
     cart += 0x10;
     cartsz -= 0x10;
   }
-  printf("Loaded rom: %x %x\n", romsz, cartsz);
+  printf("Loaded rom: %x %x\n", (int)romsz, (int)cartsz);
   register_handler(0x0000, 0x4FFF, 0xFFFF, memio,    ram,  _RW, "RAM");
   register_handler(0xD000, 0xD0FF, 0xFFFF, gtia_io,  this, _RW|_DBG, "GTIA");
   register_handler(0xD200, 0xD2FF, 0xFFFF, pokey_io, this, _RW|_DBG, "POKEY");
@@ -598,6 +598,6 @@ int main(int argc, char *argv[])
 {
   setbuf(stdout, NULL);
   if (argc > 1) {
-    sys.init("atarirom/REV03.ROM", argv[1]);
+    sys.xl_init("atarirom/REV03.ROM", argv[1]);
   }
 }

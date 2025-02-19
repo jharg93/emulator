@@ -1,6 +1,6 @@
-LXCPP = clang++ -std=c++20
+LXCPP = clang++
 SDLFLAGS = -DGR -D_SDL `sdl2-config --cflags --libs`
-CFLAGS = -std=c++20 -Wall -ggdb3 -fomit-frame-pointer -O3 -Icpu -Icommon -I. ${SDLFLAGS}
+CFLAGS = -std=c++20 -Wall -ggdb3 -Icpu -Icommon -I. ${SDLFLAGS}
 
 STDC = common/bus.cc common/gr.cc common/util.cc common/cpu.cc
 STDH = $(STDC) common/bus.h common/gr.h common/util.h Makefile
@@ -47,6 +47,14 @@ n64: n64.cc $(STDC)
 atarixl: atarixl.cc cpu/cpu_6502.cc $(STDC)
 	$(LXCPP) $(CFLAGS) -o atarixl atarixl.cc cpu/cpu_6502.cc $(STDC)
 
+
+invaders: i8080.c common/bus.cc
+	$(LXCPP) $(CFLAGS) -o invaders i8080.c common/bus.cc common/gr.cc
+
+nes: cart.cc cpu/cpu_6502.cc ${STDC} nes.cc
+	$(LXCPP) $(CFLAGS) -o nes nes.cc cart.cc cpu/cpu_6502.cc $(STDC) -DNOFAKE
+
+
 .PHONY: clean
 clean:
-	rm -f gboy gba psx snes c64 ppc 8086 mac amiga genesis appleii n64 atarixl
+	rm -rf gboy gba psx snes c64 ppc 8086 mac amiga genesis appleii n64 atarixl invaders *.dSYM
