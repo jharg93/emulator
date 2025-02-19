@@ -1046,6 +1046,7 @@ static constexpr int mkop(int n, const char *bits) {
       val |= (ch - '0');
     }
   }
+  return val;
 }
 
 typedef void (cpu::*efn)(val_t &, val_t, val_t);

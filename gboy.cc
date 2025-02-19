@@ -841,7 +841,6 @@ static int mbc2ram(void *arg, uint32_t offset, int mode, uint8_t &data)
 static int mbc3io(void *arg, uint32_t offset, int mode, uint8_t &data)
 {
   gameboy *gb = (gameboy *)arg;
-  int& rombk = gb->rombk;
   int& rambk = gb->rambk;
   
   flogger(0, "PC:%.4X mbc3io %.4x %c %.2x\n", SPC, offset, mode, data);
@@ -865,7 +864,6 @@ static int mbc5io(void *arg, uint32_t offset, int mode, uint8_t &data)
 {
   gameboy *gb = (gameboy *)arg;
   int& rombk = gb->rombk;
-  int& rambk = gb->rambk;
   
   flogger(0, "%.6x PC:%.4X mbc5io %.4x %c %.2x\n", gb->rom1.bank, SPC, offset, mode, data);
   if (offset <= 0x1FFF) {

@@ -22,7 +22,6 @@ uint32_t clockticks6502;
 uint8_t cpu_read8(uint32_t addr, int mode)
 {
   uint8_t v = cart->read(addr);
-  printf("cart read: %.4x = %x\n", addr, v);
   return v;
 }
 
@@ -46,6 +45,7 @@ int cpu_tick(int n)
   if (ncycles == 0) {
     ncycles = cpu_step();
   }
+  return 0;
 }
 
 int main(int argc, char *argv[])

@@ -1190,8 +1190,6 @@ void dumpnt(uint16_t *nt, int scrSz) {
     mm = 32*64;
   for (int i = 0; i < mm; i+=step) {
     for (int j=0; j<step; j++) {
-      int tid = nt[i+j];
-
       if (nt[i+j] & 0x3FF) {
 	printf("%.3x ", nt[i+j] & 0x3FF);
       }
@@ -1274,7 +1272,6 @@ void ppu_t::drawbg(int n, int pri)
   }
   w = b->tileSz >> 8;
   h = b->tileSz & 0xff;
-  int sw = b->scrSz >> 8;
   int sh = b->scrSz & 0xff;
   for (tile = 0; tile < 32*sh; tile++) {
     tid = nt[tile];
@@ -1604,7 +1601,7 @@ void ppu_t::runhdma(int y)
 	h->src += 2;
 	break;
       }
-      printf("line: %d, count:$d, val:%x\n", scanline, h->count, nxtval[i]);
+      printf("line: %d, count:%d, val:%x\n", scanline, h->count, nxtval[i]);
     }
     switch(h->mode) {
     case 0x00:
@@ -1637,7 +1634,7 @@ int main(int argc, char *argv[])
     exit(0);
   }
   cart = loadrom(argv[1], sz);
-  printf("Got cart: %x\n", sz);
+  printf("Got cart: %x\n", (int)sz);
   if ((sz % 1024) != 0) {
     printf("Rom Header! %.2x %.2x %.2x %.2x %.2x\n",
 	   cart[0], cart[1], cart[2], cart[0x8], cart[0x9]);

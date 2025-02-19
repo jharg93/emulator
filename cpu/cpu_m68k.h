@@ -2191,7 +2191,6 @@ void gentbl()
 {
   opcode_t *ot;
   int nentry = 0;
-  bool s;
 
   for (ot = optab; ot->mnem; ot++) {
     uint16_t mask = ot->opbit_mask;

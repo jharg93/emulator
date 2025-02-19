@@ -1,6 +1,7 @@
 int myio(void *arg, uint32_t addr, int mode, iodata_t& val) {
   memio(arg, addr, mode, val);
   printf("myio: %.8x %c %x : %.2x%s\n", addr, mode, val, cpu_getflags(), cpu_flagstr());
+  return 0;
 }
 
 void _assert(int got, int expect, const char *lbl)
@@ -32,7 +33,7 @@ void read_json(const char *f) {
     p1 = strstr(line, "\"pc\"");
     if (p1 == NULL)
       continue;
-    printf(p1);
+    printf("%s", p1);
     rc = sscanf(p1, "\"pc\": %d, \"s\": %d, \"p\": %d, \"a\": %d, \"x\": %d, \"y\": %d, \"dbr\": %d, \"d\": %d, \"pbr\": %d, \"e\": %d",
 		&pc, &s, &p, &a, &x, &y, &dbr, &d, &pbr, &e);
     assert(rc == 10);

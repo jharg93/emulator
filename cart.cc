@@ -13,49 +13,42 @@
 #include "dstk.h"
 #include <math.h>
 
-const char *comment(int n) {
-  return "";
-}
-
-void flogger(int lvl, const char *fmt, ...);
-
 int _elapsed;
+int vk = 9;
 
 void apu_init();
 void apu_tick();
 void apu_write(int addr, uint8_t v);
-uint8_t apu_read(int addr);
-void apu_run_frame();
+uint8_t apu_read(int addr) {
+  return 0;
+};
+void apu_run_frame() {
+};
+const char *comment(int addr) {
+  return "";
+}
 
-int  ppuGetMirror();
-void ppuSetMirror(int);
-
-#ifndef _WSDL
-uint8_t apu_read(int addr) { return 0; };
-void apu_run_frame() { };
-void apu_init() { };
-void apu_tick() { };
-void apu_write(int a, uint8_t v) { }
-#endif
+const double RandMax = RAND_MAX;
+const double ChromaticRatio = 1.059463094359295264562;
+const double Tau = 6.283185307179586476925;
+const double Pi  = 3.141592653589793238462;
 
 #define SCANLINE_VBLANK 241
 #define SCANLINE_PRE    261
 
 int dma_addr = 0;
 int dma_count = 0;
-int dma_ticks = 1;
 
-extern uint32_t clockticks6502, clockgoal6502;
+extern uint16_t clockticks6502;
 extern uint16_t OPC;
 extern uint8_t a,x,y,status;
 
-extern bool cpu_irq(int);
 extern void cpu_nmi(void);
-extern void cpu_reset(uint32_t);
+extern void cpu_reset(uint32_t addr=0);
 extern int  cpu_tick(int);
 extern int rdy;
 
-int curbank, sreg=0;
+int frame, scanline, clks, curbank;
 
 /* mapping of nametables */
 #define MIRROR_4SCR  0x0123
@@ -69,16 +62,50 @@ int vismask;
 void flogger(int lvl, const char *fmt, ...) {
   va_list ap;
 
-  va_start(ap,fmt);
-  vprintf(fmt, ap);
+  return;
+  if (lvl > 0)
+    return;
+  if (lvl == -3) {
+    return;
+    fprintf(stderr, "[%s] frame:%4d scanline:%4d clks:%4d ", vismask ? "vis" : "---", frame, scanline, clks);
+  }
+  va_start(ap, fmt);
+  if (lvl == 0) {
+    fprintf(stderr,"%.2x.%.4X: [%7d] A=%.2X X=%.2X Y=%.2X [%c%c%c%c%c%c%c%c] ", curbank,OPC, _elapsed, a,x,y,
+	    status & 0x80 ? 'N' : ' ',
+	    status & 0x40 ? 'V' : ' ',
+	    status & 0x20 ? 'K' : ' ',
+	    status & 0x10 ? 'B' : ' ',
+	    status & 0x08 ? 'D' : ' ',
+	    status & 0x04 ? 'I' : ' ',
+	    status & 0x02 ? 'C' : ' ',
+	    status & 0x01 ? 'Z' : ' ');
+    fprintf(stderr, "[%s] frame:%4d scanline:%4d clks:%4d ", vismask ? "vis" : "---", frame, scanline, clks);
+  }
+  vfprintf(stderr, fmt, ap);
+  va_end(ap);
 }
 
 /* Mapper code: read/write nbanks */
+#if 0
+mapper_t::mapper_t(uint8_t *mem, int nbank, int sz, int start, int end, const char *name) {
+  flogger(0,"Setting up %d %dk banks [%s] \n", nbank, sz / 1024, name);
+  nBank     = nbank;
+  bankStart = start;
+  bankEnd   = end;
+  bankSz    = sz;
+  cartmem   = mem;
+
+  /* Always set to last bank */
+  setbank(nbank-1);
+};
+#endif
+
 uint8_t *mapper_t::setbank(int pg) {
   if (pg < 0)
     pg += nBank;
   if (curpg != pg) {
-    flogger(0,"======= setbank(%x) %x\n", pg, pg * bankSz);
+    flogger(0,"======= setbank(%d) %x\n", pg, pg * bankSz);
     curpg = pg;
     page = cartmem + (pg * bankSz);
   }
@@ -112,42 +139,35 @@ bool mapper_t::read(int addr, uint8_t& v) {
   return false;
 }
 
-/* Mappers
- *  000: PRG=16/32 RAM=2/4  CHR=8
- *  001: PRG=[2]256/512 RAM=32 CHR=[4/4 OR 8]128    001,105,155
- *  002: PRG=[16/16]256/4M  RAM=0  CHR=8K           002,094,180
- *  003: PRG=16/32 RAM=0 CHR=[8]32/2M               003
- *  004: PRG=[8/8/16]512  RAM=8K  CHR=[2/2/1/1/1/1]
- */
+void ppuSetMirror(int);
+
+struct slice {
+  int      nSlice;
+  int      sliceSz;
+  int      maxBank;
+};
+
 /* Return CHR and PRG addresses based on bank 
  * A16|A15 A14 A13 A12|A11 A10 A09 A08|A07 A06 A05 A04|A03 A02 A01 A00 */
 
 /* Mapper 0/Generic : NROM */
 struct nesMapper {
-  int prgMask, chrMask;
   int prgSz, nPrgSlice;
   int chrSz, nChrSlice;
   uint8_t *prg;
   uint8_t *chr;
-  bank_t  *pb;
-  bank_t  *cb;
 
-  /* RAM: 0x0000 - 0x1FFF (mirrored) */
   nesMapper(int csl, int csz, uint8_t *c, int psl, int psz, uint8_t *p) :
     prgSz(psz), nPrgSlice(psl),
     chrSz(csz), nChrSlice(csl),
     prg(p), chr(c)
   {
   };
-
-  virtual void scanline() {
-  };
-
-#if 1
+  
   /* Set bank to new value */
   void setb(int& br, int nb, const char *name) {
     if (nb != br) {
-      flogger(1, "[%s]: setbank %.2x\n", name, nb);
+      flogger(0, "[%s]: setbank %d\n", name, nb);
       br = nb;
     }
   };
@@ -160,27 +180,22 @@ struct nesMapper {
       b += maxb;
     }
     addr = (b * bsz) + (addr % bsz);
-    printf("BANKIO: %.4x %.4x %.2x\n", (b * bsz), (addr % bsz), prg[addr]);
     if (addr >= prgSz) {
-      fprintf(stderr, "toobig %x/%x\n", b * bsz, prgSz);
+      fprintf(stderr, "toobig\n");
       exit(0);
     }
     return prg[addr];
   };
   /* Overridables */
   virtual int write(int addr, uint8_t data) {
-    assert(0);
     return 0;
   };
   virtual uint8_t &prgaddr(int addr) {
-    assert(0);
     return prg[addr % prgSz];
   };
   virtual uint8_t &chraddr(int addr) {
-    assert(0);
     return chr[addr];
   };
-#endif
 };
 
 /* Mapper 1: MMC1
@@ -299,25 +314,6 @@ struct nesMapper001 : public nesMapper {
  *   0xc000 fixed        -1
  * 1  8k CHR bank
  */
-int b2sel(void *arg, uint32_t offset, int mode, uint8_t& data)
-{
-  bank_t *b = (bank_t *)arg;
-  printf("setbank: %x\n", data);
-  setbank(b, data);
-  return 0;
-}
-
-void map002_init(bus_t &mb, bus_t &ppu, uint8_t *prg, int psz, uint8_t *chr, int csz)
-{
-  static bank_t b[2];
-
-  initbank(&b[0], prg, psz, 16384, 0,  "002.prg0");
-  initbank(&b[1], prg, psz, 16384, -1, "002.prg1");
-  mb.register_handler(0x8000, 0xBFFF, 0x3FFF, bankio, &b[0], _RD, "002.prg0");
-  mb.register_handler(0xC000, 0xFFFF, 0x3FFF, bankio, &b[1], _RD, "002.prg1");
-  mb.register_handler(0x8000, 0xFFFF, 0xFFFF, b2sel,  &b[0], _WR, "002.prg0.sel");
-}
-
 struct nesMapper002 : public nesMapper {
   nesMapper002(int csz, uint8_t *c, int psz, uint8_t *p) : nesMapper(1, csz, c, 2, psz, p) {
     flogger(0, "Mapper2: %d PRG, %d CHR\n", psz / 16384, 1);
@@ -342,77 +338,57 @@ struct nesMapper002 : public nesMapper {
  */
 struct nesMapper004 : public nesMapper {
   nesMapper004(int csz, uint8_t *c, int psz, uint8_t *p) : nesMapper(8, csz, c, 4, psz, p) {
-    flogger(0, "Mapper4 %.2x PRG, %.2x CHR\n", psz / 8192, csz / 1024);
-    chrMask = (csz / 1024) - 1;
-    prgMask = (psz / 8192) - 1;
+    flogger(0, "Mapper4 %d PRG, %d CHR\n", psz / 8192, csz / 1024);
   };
   enum {
     PMODE = 0x40,
     CMODE = 0x80
   };
   uint8_t R[8],reg8000;
-  int     PB[4] = { 0,0,0,-1 };
-  int     CB[8];
-  int     irqCounter = 0, irqReload = 0;
-  bool    irqEnabled = false;
+  int PB[4] = { 0,0,0,-1 };
+  int CB[8];
   
   int write(int addr, uint8_t data) {
     int x;
 
-    switch (addr & 0xE001) {
+    switch (addr & 0xF001) {
     case 0x8000:
-      // reg number
       reg8000 = data;
       break;
     case 0x8001:
-      // reg value
-      flogger(1, "004:R[%x] = %x\n", reg8000 & 7, data);
       R[reg8000 & 7] = data;
       break;
     case 0xA000:
-      // mirror mode
-      flogger(1, "004:Mirroring: %x\n", data);
-      if (ppuGetMirror() != MIRROR_4SCR)
-	ppuSetMirror(data & 1 ? MIRROR_HORZ : MIRROR_VERT);
+      flogger(0, "004:Mirroring: %x\n", data);
+      ppuSetMirror(data & 1 ? MIRROR_HORZ : MIRROR_VERT);
       break;
     case 0xA001:
-      flogger(1, "004:prg ram: %x\n", data);
+      flogger(0, "004:prg ram: %x\n", data);
       break;
     case 0xc000:
-      flogger(1, "004:irq latch: %x\n", data);
-      irqReload = data;
+      flogger(0, "004:irq latch: %x\n", data);
       break;
     case 0xc001:
-      flogger(1, "004:irq reload: %x\n", data);
-      irqCounter = 0;
-      break;
-    case 0xe000:
-      flogger(1, "000:set irqEnabled false\n");
-      irqEnabled = false;
-      break;
-    case 0xe001:
-      flogger(1, "004:set irqEnabled true\n");
-      irqEnabled = true;
+      flogger(0, "004:irq reload: %x\n", data);
       break;
     }
     /* Set PRG map */
     x = (reg8000 & PMODE) ? 0x2 : 0x0;
-    setb(PB[x],   R[6] & prgMask, "004.prg0");
-    setb(PB[1],   R[7] & prgMask, "004.prg1");
+    setb(PB[x],   R[6] & 0x1f, "004.prg0");
+    setb(PB[1],   R[7] & 0x1f, "004.prg1");
     setb(PB[x^2], -2,   "004.prg2");
     setb(PB[3],   -1,   "004.prg3");
 
     /* Set CHR Map */
     x = (reg8000 & CMODE) ? 0x4 : 0x0;
-    setb(CB[x]  , (R[0] & 0xFE) & chrMask, "004.chr0");
-    setb(CB[x^1], (R[0] | 0x01) & chrMask, "004.chr1");
-    setb(CB[x^2], (R[1] & 0xFE) & chrMask, "004.chr2");
-    setb(CB[x^3], (R[1] | 0x01) & chrMask, "004.chr3");
-    setb(CB[x^4], R[2] & chrMask, "004.chr4");
-    setb(CB[x^5], R[3] & chrMask, "004.chr5");
-    setb(CB[x^6], R[4] & chrMask, "004.chr6");
-    setb(CB[x^7], R[5] & chrMask, "004.chr7");
-
+    setb(CB[x]  , R[0] & 0xFE, "004.chr0");
+    setb(CB[x^1], R[0] | 0x01, "004.chr1");
+    setb(CB[x^2], R[1] & 0xFE, "004.chr2");
+    setb(CB[x^3], R[1] | 0x01, "004.chr3");
+    setb(CB[x^4], R[2], "004.chr4");
+    setb(CB[x^5], R[3], "004.chr5");
+    setb(CB[x^6], R[4], "004.chr6");
+    setb(CB[x^7], R[5], "004.chr7");
     return 0;
   };
   uint8_t &prgaddr(int addr) {
@@ -423,126 +399,9 @@ struct nesMapper004 : public nesMapper {
     int cbank = CB[(addr / 1024) % nChrSlice];
     return cv(cbank, 1024, addr);
   };
-  void scanline() {
-    if (irqCounter-- == 0)
-      irqCounter = irqReload;
-    if (irqEnabled && !irqCounter) {
-      flogger(0, "004:scanline: irq\n", irqCounter);
-      cpu_irq(0);
-    }
-  };
 };
 
-struct b4_t {
-  bank_t  pb[4];
-  bank_t  cb[8];
-  uint8_t reg;
-  uint8_t R[8];
-};
-
-int b4sel(void *arg, uint32_t offset, int mode, uint8_t& data)
-{
-  b4_t *b = (b4_t *)arg;
-}
-
-void map004_init(bus_t &mb, bus_t &ppu, uint8_t *prg, int psz, uint8_t *chr, int csz)
-{
-  static b4_t b;
-
-  for (int i = 0x8000; i < 0xFFFF; i += 0x4000) {
-    initbank(&b.pb[i], prg, psz, 0x4000, 0, "004.prg");
-    mb.register_handler(i, i+0x3FFF, 0x3FFF, bankio, &b.pb[i], _RD, "004.PRG");
-  }
-  for (int i = 0x0000; i < 0x1FFF; i += 0x0800) {
-    initbank(&b.cb[i], chr, csz, 0x0800, 0, "004.chr");
-    mb.register_handler(i, i+0x07FF, 0x07FF, bankio, &b.cb[i], _RD, "004.CHR");
-  }
-  mb.register_handler(0x8000, 0xFFFF, 0xE001, b4sel, &b, _WR, "004.PRGsel");
-}
-
-struct nesMapper69 : public nesMapper {
-  nesMapper69(int csz, uint8_t *c, int psz, uint8_t *p) : nesMapper(8, csz, c, 4, psz, p) {
-    flogger(0, "Mapper69 %.2x PRG, %.2x CHR\n", psz / 32768, csz / 8192);
-    prgMask = (psz / 32768) - 1;
-    chrMask = (csz / 8192) - 1;
-  };
-  uint8_t cmd;
-  int C[8] = { 0, 1, 2, 3, 4, 5, 6, 7, }, P[4] = { 0, 1, 2, -1 };
-  int write(int addr, uint8_t data) {
-    int mirrtype[] = { MIRROR_VERT, MIRROR_HORZ, 0x0000, 0x1111 };
-    
-    flogger(0, "Mapper69 Write: %.4x %.2x\n", addr, data);
-    switch (addr & 0xE000) {
-    case 0x8000:
-      cmd = data;
-      break;
-    case 0xA000:
-      switch (cmd) {
-      case 0 ... 7:
-	flogger(0, "set chrbank %d %d\n", cmd, data);
-	setb(C[cmd], (data & chrMask), "CHR");
-	break;
-      case 0x9 ... 0xB:
-	flogger(0, "set prgbank %d %d\n", cmd, data);
-	setb(P[cmd - 9], (data & prgMask), "PRG");
-	break;
-      case 0x0c:
-	ppuSetMirror(mirrtype[data & 3]);
-	break;
-      default:
-	assert(0);
-      };
-    };
-    return 0;
-  };
-  uint8_t &prgaddr(int addr) {
-    int pbank = P[(addr / 8192) % nPrgSlice];
-    return pv(pbank, 8192, prgSz / 8192, addr);
-  };
-  uint8_t &chraddr(int addr) {
-    int cbank = C[(addr / 1024) % nChrSlice];
-    return cv(cbank, 1024, addr);
-  };
-};
-
-struct b7_t {
-  bank_t b;
-  int    reg;
-} b7;
-
-/* Write only */
-int b7sel(void *arg, uint32_t offset, int mode, uint8_t& data)
-{
-  b7_t *b = (b7_t *)arg;
-
-  flogger(0, "B7SEL!!!!! %.2x\n", data);
-  setbank(&b->b, (data & 7));
-  ppuSetMirror(data & 0x10 ? MIRROR_LEFT : 0x1111);
-  return 0;
-}
-
-/* 32k PRG 8000...8FFF, sel = 8000..800f
- *  8k CHR 0000...1FFF */
-void map007_init(bus_t &mb, bus_t &ppu, uint8_t *prg, int psz, uint8_t *chr, int csz)
-{
-  static b7_t b;
-  
-  initbank(&b.b, prg, psz, 32768, -1, "007");
-  mb.register_handler(0x8000,  0xFFFF, 0x7FFF, bankio, &b.b,_RD, "007.prg");
-  mb.register_handler(0x8000,  0xFFFF, 0x0000, b7sel,  &b,  _WR, "007.sel"); 
-}
-
-// PRG: 256k Capacity, 32k window, sel.wr.8000.000f
-// CHR: 8k
-struct nesMapper007 : public nesMapper {
-  nesMapper007(int csz, uint8_t *c, int psz, uint8_t *p) : nesMapper(8, csz, c, 4, psz, p) {
-    flogger(0, "Mapper7 %.2x PRG, %.2x CHR\n", psz / 32768, csz / 8192);
-    prgMask = (psz / 32768) - 1;
-    chrMask = (csz / 8192) - 1;
-  };
-};
-
-nesMapper *mapper;
+nesMapper *nmap;
 
 /* NES memory map:
  *   0x0000 - 0x07FF : 2k internal ram
@@ -592,20 +451,6 @@ enum {
   LR
 };
 
-// BG:  bgclr = bmk(attrbyte,    bgH, bgL,    15 - finex)
-// SPR: bgclr = bmk(oam[i].attr, patH, patL,   7 - x)
-int bmk(int attr, uint16_t l, uint16_t h, int m)
-{
-  l = (l >> m) & 1;
-  h = (h >> m) & 1;
-  return (attr & 3)*4 + (l * 2) + h;
-}
-
-// Sprite Attr bits
-// v-------
-// -h------
-// --p-----
-// ------PP
 struct nesgraphic {
   uint16_t patLsb;
   uint16_t patMsb;
@@ -616,11 +461,8 @@ struct nesgraphic {
   int      palid;
   uint8_t  enabled;
   uint8_t  attr;
-
+  
   /* Set graphic bits */
-  void clear() {
-    patLsb = patMsb = atLsb = atMsb = 0;
-  };
   int setBits(int fx, uint8_t l, uint8_t m, uint8_t at) {
     finex = fx;
     patLsb = (patLsb & 0xFF00) | l;
@@ -632,8 +474,8 @@ struct nesgraphic {
   int getpixel() {
     int p;
 #if 0
-    fprintf(stderr, "scanline:%4d hPos:%4d delay:%d pat:%.2x %.2x palid:%x\n",
-	    scanline, hPos, delay, patLsb, patMsb, palid);
+    fprintf(stderr, "scanline:%4d clks:%4d delay:%d pat:%.2x %.2x palid:%x\n",
+	    scanline, clks, delay, patLsb, patMsb, palid);
 #endif
     if (!enabled)
       return 0;
@@ -676,8 +518,7 @@ struct nesgraphic {
   };
 };
 
-struct ppu : public bus_t {
-  ppu() : bus_t(16384) { };
+struct ppu {
   enum {
     /* Registers */
     PPUCTRL   = 0x2000, // writeonly
@@ -720,13 +561,10 @@ struct ppu : public bus_t {
     VTAB   = 0x800,
     VHTAB  = 0xc00,
     
-    CXMASK  = (0x1F << 0),
-    CYMASK  = (0x1F << 5),
-    ACXMASK = (0x1C << 0),
-    ACYMASK = (0x1C << 5),
-    
-    VHMASK  = (0x03 << 10),
-    FYMASK  = (0x07 << 12),
+    CXMASK = (0x1F << 0),
+    CYMASK = (0x1F << 5),
+    VHMASK = (0x03 << 10),
+    FYMASK = (0x07 << 12),
     
     CX31   = 0x1F,
     CY29   = (29 << 5),
@@ -735,9 +573,11 @@ struct ppu : public bus_t {
     MAX_SPRITE = 64,
     SPRITE_OVERFLOW = 8,
   };
+  mapper_t *mapper;
 
   /* Background/Sprite chr table */
   int       chwr;
+  uint8_t  *chrRom;
   uint8_t   ram[0x4000];
   uint8_t   oam[256]{240};
 
@@ -813,28 +653,19 @@ struct ppu : public bus_t {
   };
   uint16_t  tramaddr = 0;
 
-  int rendering() {
-    return ppumask & (PPUMASK_SHOWBG|PPUMASK_SHOWSPRITE);
-  }
-
   void copyhorz() {
-    // h_update
     // ----.-h--.---X.XXXX
-    if (rendering()) {
+    if (ppumask & (PPUMASK_SHOWBG|PPUMASK_SHOWSPRITE)) {
       vramaddr = (vramaddr & ~0x41F) | (tramaddr & 0x41F);
     }
   }
   void copyvert() {
-    // v_update
     // -yyy.v-yy.yyy-.----
-    if (rendering()) {
+    if (ppumask & (PPUMASK_SHOWBG|PPUMASK_SHOWSPRITE)) {
       vramaddr = (vramaddr & ~0x7BE0) | (tramaddr & 0x7BE0);
     }
   }
   void inc_hori() {
-    /* h_scroll */
-    if (!rendering())
-      return;
     if ((vramaddr & CXMASK) == 31) {
       vramaddr ^= (HTAB|CXMASK);
     }
@@ -843,9 +674,6 @@ struct ppu : public bus_t {
     }
   };
   void inc_vert() {
-    /* v_scroll */
-    if (!rendering())
-      return;
     if (fy != 7) {
       fy++;
     }
@@ -864,67 +692,57 @@ struct ppu : public bus_t {
     }
   };
   uint8_t read(int addr);
- void    write(int addr, uint8_t data);
+  void    write(int addr, uint8_t data);
 
   uint8_t readreg(int addr);
   void    writereg(int addr, uint8_t data);
 
   /* Set mirroring mode. each nybble maps to different nameid */
   void setmirror(int mode) {
-    if (mirror != mode) {
-      flogger(0, "Set Mirror: %.4x\n", mode); 
+    if (mirror != MIRROR_4SCR) {
       mirror = mode;
       nt[UL] = &nametable[((mode >> 12) & 0xF) * 0x400];
       nt[UR] = &nametable[((mode >> 8)  & 0xF) * 0x400];
       nt[LL] = &nametable[((mode >> 4)  & 0xF) * 0x400];
       nt[LR] = &nametable[((mode >> 0)  & 0xF) * 0x400];
-    }
+    };
   };
 
   /* Load any sprites on this scanline */
   int loadsprites(int y) {
     uint8_t l,m;
     int count = 0;
-    int i, dy, h = spriteSz;
+    int dy, h = spriteSz;
     int tile, base;
     
     flogger(1, "------------------------ LoadSprites\n");
     for (int i = 0; i < MAX_SPRITE; i++) {
       /* Ignore off-screen sprites */
-      if (o_sprites[i].y >= 239 || o_sprites[i].x == 255) {
+      if (o_sprites[i].y >= 240)
 	continue;
-      }
-      dy = (y - o_sprites[i].y);
+      dy = (y + 1) - o_sprites[i].y;
       if (dy >= 0 && dy < h) {
-	flogger(1, "LoadSprite %d: (%d,%d) 8x%d %c%c pri:%d pal:%x tile:%.2x\n",
+	flogger(1, "LoadSprite %d: (%d,%d) 8x%d %c%c pri:%d pal:%x\n",
 		i, o_sprites[i].x, o_sprites[i].y,spriteSz,
 		o_sprites[i].attr & ATTR_V ? 'v' : '-',
 		o_sprites[i].attr & ATTR_H ? 'h' : '-',
-		!!(o_sprites[i].attr & ATTR_P),
-		(o_sprites[i].attr & 3),
-		o_sprites[i].index);
+		o_sprites[i].attr & ATTR_P > 0,
+		o_sprites[i].attr & 3);
 	if (count >= SPRITE_OVERFLOW) {
-	  flogger(0, "sprite overflow\n");
+	  flogger(1, "sprite overflow\n");
 	  ppustatus |= PPUSTATUS_O;
 	  return SPRITE_OVERFLOW;
 	}
 	/* Vert mirror */
+	if (o_sprites[i].attr & ATTR_V)
+	  dy ^= 7;
 	if (spriteSz == 16) {
-	  base = (o_sprites[i].index & 1) << 12;
-	  tile = o_sprites[i].index & 0xFE;
-	  if (o_sprites[i].attr & ATTR_V) {
-	    dy ^= 0xF;
-	  }
-	  if (dy >= 8) {
-	    tile++;
-	    dy &= 7;
-	  }
+	  base = (o_sprites[i].index & 1) << 12; 
+	  tile = o_sprites[i].index & ~1;
 	}
 	else {
 	  base = spriteTbl;
 	  tile = o_sprites[i].index;
-	  if (o_sprites[i].attr & ATTR_V)
-	    dy ^= 7;
 	}
 	/* Load sprite tiles data */
 	l = read(base + tile * 16 + dy);
@@ -933,14 +751,11 @@ struct ppu : public bus_t {
 	spr[count].attr    = o_sprites[i].attr;
 	spr[count].palid   = 0x3f10 + 4*(o_sprites[i].attr & 3);
 	spr[count].enabled = ppumask & PPUMASK_SHOWSPRITE;
-	spr[count].delay   = o_sprites[i].x - 2;
+	spr[count].delay   = o_sprites[i].x;
 	if ((o_sprites[i].attr & ATTR_H) == 0)
 	  spr[count].delay -= 8;
 	s_sprites[count++] = o_sprites[i];
       }
-    }
-    for (i = count; i < 8; i++) {
-      spr[i].enabled = 0;
     }
     return count;
   };
@@ -980,23 +795,25 @@ struct ppu : public bus_t {
     switch(clk % 8) {
     case 0x1: // ntbyte
       addr = 0x2000 + (vramaddr & 0x0FFF);
-      ntbyte = read(addr) * 16;
+      ntbyte = read(addr);
       break;
     case 0x3: // atbyte
-      addr = 0x23C0 + (vramaddr & VHTAB) + ((vramaddr & ACYMASK) >> 4) + ((vramaddr & ACXMASK) >> 2);
+      addr = 0x23C0 + (vramaddr & 0x0C00) + ((vramaddr >> 4) & 0x38) + ((vramaddr >> 2) & 0x07);
       qb = ((vramaddr >> 4) & 0x4) + (vramaddr & 0x2);
       atbyte = (read(addr) >> qb) & 3;
       break;
     case 0x5: // patlsb
-      addr = bgTbl + ntbyte + fineY;
+      addr = bgTbl + ntbyte*16 + fineY;
       patLsb = read(addr);
       break;
     case 0x7: // patmsb
-      addr = bgTbl + ntbyte + fineY + 8;
+      addr = bgTbl + ntbyte*16 + fineY + 8;
       patMsb = read(addr);
-      flogger(1, "fx:%x %.2x %.2x %x vram=%.4x\n", finex, patLsb, patMsb, atbyte, vramaddr);
+      break;
+    case 0x0:
       bk.enabled = ppumask & PPUMASK_SHOWBG;
       bk.setBits(finex, patLsb, patMsb, atbyte);
+
       // Increment CX
       inc_hori();
       break;
@@ -1006,7 +823,7 @@ struct ppu : public bus_t {
 
 int paladdr (int addr) {
   addr &= 0x1F;
-  if (addr == 0x10 || addr == 0x14 || addr == 0x18 || addr == 0x1c)
+  if (addr == 0x10 || addr == 0x14 || addr == 0x18 || addr == 0x0c)
     addr -= 0x10;
   return addr;
 }
@@ -1025,13 +842,23 @@ const char *ppureg(int n) {
   return "";
 }
 
+ 
 /* Read from ppu memory */
 uint8_t ppu::read(int addr) {
-  uint8_t data;
-  
-  if (bus_t::read(addr, data) == 0)
-    return data;
-  flogger(0, "Unknown ppu read address: %x\n", addr);
+  flogger(2, "read ppu: %.4x\n", addr);
+  switch (addr) {
+  case 0x0000 ... 0x1FFF:
+    // read tile rom
+    return nmap->chraddr(addr);
+  case 0x2000 ... 0x3EFF:
+    // read nametable
+    return nt[(addr >> 10) & 3][addr & 0x3FF];
+  case 0x3F00 ... 0x3FFF:
+    return palette[paladdr(addr)];
+  default:
+    flogger(0, "Unknown ppu address: %x\n", addr);
+    break;
+  }
   return 0xff;
 };
 
@@ -1039,9 +866,26 @@ uint8_t ppu::read(int addr) {
 void ppu::write(int addr, uint8_t data) {
   last = data & 0x1F;
 
-  if (bus_t::write(addr, data) == 0)
-    return;
-  flogger(0, "Unknown ppu write address: %x\n", addr);
+  flogger(2, "write ppu: %.4x = %.2x\n", addr, data);
+  switch (addr) {
+  case 0x0000 ... 0x1FFF:
+    // chr-rom
+    if (chwr) {
+      chrRom[addr & 0x1FFF] = data;
+    }
+    break;
+  case 0x2000 ... 0x3EFF:
+    // write to nametables ----.vh--.----.----
+    nt[(addr >> 10) & 3][addr & 0x3FF] = data;
+    break;
+  case 0x3F00 ... 0x3FFF:
+    // write palette
+    palette[paladdr(addr)] = data;
+    break;
+  default:
+    flogger(0, "Unknown ppu address: %x\n", addr);
+    break;
+  }
 };
 
 /* Write PPU register */
@@ -1050,9 +894,6 @@ uint8_t ppu::readreg(int addr) {
   
   flogger(1, " ppu.readreg(%x:%s)\n", addr, ppureg(addr));
   switch (addr) {
-  case PPUCTRL:
-    data = ppuctrl;
-    break;
   case PPUSTATUS:
     data = ppustatus | (last & 0x1F);
     ppustatus &= ~PPUSTATUS_V;
@@ -1075,7 +916,7 @@ uint8_t ppu::readreg(int addr) {
     vramaddr += vramIncr;
     break;
   default:
-    flogger(0, "Unknown ppu read register:%x\n", addr);
+    flogger(0, "Unknown ppu register:%x\n", addr);
     break;
   }
   return data;
@@ -1084,10 +925,8 @@ uint8_t ppu::readreg(int addr) {
 /* Read PPU Register */
 #define yn(x) (data & (x)) ? "yes" : "no"
 
-#define chg(a,b) !((data ^ (a)) & (b))
-
 void ppu::writereg(int addr, uint8_t data) {
-  flogger(1, " ppu.writereg(%.4x:%s,%.2x)\n", addr, ppureg(addr), data);
+  flogger(1, " ppu.writereg(%.4x:%s,%.2x)\n", addr, ppureg(addr),data);
   switch (addr) {
   case PPUCTRL:
     bgTbl     = (data & PPUCTRL_BGTBL) ? 0x1000 : 0x0000;
@@ -1095,11 +934,11 @@ void ppu::writereg(int addr, uint8_t data) {
     spriteSz  = (data & PPUCTRL_SPRITESZ)  ? 16 : 8;
     nameTbl   = 0x2000 + ((data & PPUCTRL_NTMASK) * 0x400);
     vramIncr  = (data & PPUCTRL_INCR) ? 32 : 1;
-
+    
     flogger(1, " PPUCTRL:NMI         %s\n",   yn(PPUCTRL_NMI));
     flogger(1, " PPUCTRL:MASTER      %s\n",   yn(PPUCTRL_MASTER));
     flogger(1, " PPUCTRL::NameTable  %.4x\n", nameTbl);
-    flogger(1, " PPUCTRL::BGTBL      %.4x\n", bgTbl);
+    flogger(0, " PPUCTRL::BGTBL      %.4x\n", bgTbl);
     flogger(1, " PPUCTRL::SPRITETBL  %.4x\n", spriteTbl);
     flogger(1, " PPUCTRL::SPRITESIZE 8x%d\n", spriteSz);
     flogger(1, " PPUCTRL::VRAM Incr  %d\n",   vramIncr);
@@ -1112,7 +951,7 @@ void ppu::writereg(int addr, uint8_t data) {
   case PPUMASK:
     flogger(1," PPUMASK::LeftBG     : %s\n", yn(PPUMASK_LEFTBG));
     flogger(1," PPUMASK::LeftSprite : %s\n", yn(PPUMASK_LEFTSPRITE));
-    flogger(1," PPUMASK::ShowBG     : %s\n", yn(PPUMASK_SHOWBG));
+    flogger(1," PPUMASK:ShowBG      : %s\n", yn(PPUMASK_SHOWBG));
     flogger(1," PPUMASK::ShowSprite : %s\n", yn(PPUMASK_SHOWSPRITE));
     vismask = data & (PPUMASK_SHOWBG|PPUMASK_SHOWSPRITE);
     ppumask = data;
@@ -1133,20 +972,14 @@ void ppu::writereg(int addr, uint8_t data) {
       // tramaddr: ----.----.---A.BCDE
       finex    = (data & 7);
       tramaddr = (tramaddr & 0x7FE0) | (data >> 3);
-      flogger(1, " P:setscroll: cx:%d fx:%d\n", (data >> 3), data & 7);
+      flogger(0, "setscroll: cx:%d fx:%d\n", (data >> 3), data & 7);
     }
     else {
       // write upper half of scroll register (Y)
       // data:               ABCD.Efgh
       // tramaddr: -fgh.--AB.CDE-.----
       tramaddr = (tramaddr & ~0x73E0) | ((data << 12) & FYMASK) | ((data << 2) & CYMASK);
-      flogger(1, " P:setscroll: cy:%d fy:%d\n", (data >> 3), data & 7);
-      flogger(sreg, " P:tramaddr: %.4x NT:%d  Y=%d.%d  X=%d.%d\n", tramaddr,
-	      (tramaddr >> 10) & 0x3,
-	      (tramaddr >>  5) & 0x1F,
-	      (tramaddr >> 12) & 0x7,
-	      (tramaddr >>  0) & 0x1F,
-	      finex);
+      flogger(0, "setscroll: cy:%d fy:%d\n", (data >> 3), data & 7);
     }
     latch ^= 1;
     break;
@@ -1163,18 +996,12 @@ void ppu::writereg(int addr, uint8_t data) {
       // tram: ----.----.YYYX.XXXX
       tramaddr = (tramaddr & 0xFF00) | data;
       vramaddr = tramaddr;
-      flogger(sreg, " P:vramaddr: %.4x NT:%d  Y=%d.%d  X=%d.%d\n", vramaddr,
-	      (vramaddr >> 10) & 0x3,
-	      (vramaddr >>  5) & 0x1F,
-	      (vramaddr >> 12) & 0x7,
-	      (vramaddr >>  0) & 0x1F,
-	      finex);
     }
+    flogger(0, "setaddr: %.4x\n", vramaddr);
     latch ^= 1;
     break;
   case PPUDATA:
     /* Write data & increment address */
-    flogger(1, " P:vramwrite: %.4x = %.2x,%d\n", vramaddr, data, vramIncr);
     write(vramaddr, data);
     vramaddr += vramIncr;
     break;
@@ -1186,109 +1013,18 @@ void ppu::writereg(int addr, uint8_t data) {
 
 struct ppu ppu;
 
-int  ppuGetMirror() {
-  return ppu.mirror;
-}
-
 void ppuSetMirror(int m) {
   ppu.setmirror(m);
 }
 
 void dumpcfg(uint8_t *buf, int sz);
 
-/*=====================================================================
- *=====================================================================
- *                    IO functions for NES
- *=====================================================================
- *=====================================================================*/
-int ppuio(void *arg, uint32_t addr, int mode, uint8_t& data)
-{
-  if (mode == 'w')
-    ppu.writereg(addr, data);
-  else
-    data = ppu.readreg(addr);
-  return 0;
-}
+uint8_t cartRam[0x2000];
 
-int apuio(void *arg, uint32_t addr, int mode, uint8_t& data)
-{
-  if (mode == 'w')
-    apu_write(addr, data);
-  else
-    data = apu_read(addr);
-  return 0;
-}
-
-int ctrlio(void *arg, uint32_t addr, int mode, uint8_t& data)
-{
-  nescart *nc = (nescart *)arg;
-  if (mode == 'r') {
-    /* Read out serial data */
-    data = !!(nc->controller_state[addr] & 0x1);
-    nc->controller_state[addr] >>= 1;
-  }
-  else if (!(data & 1)) {
-    /* Save current keystate */
-    nc->controller_state[addr] = nc->controller[addr];
-  }
-  return 0;
-}
-
-int prgio(void *arg, uint32_t addr, int mode, uint8_t& data)
-{
-  nesMapper *m = (nesMapper *)arg;
-  
-  if (mode == 'w')
-    m->write(addr, data);
-  else {
-    data = m->prgaddr(addr);
-  }
-  return 0;
-}
-
-int chrio(void *arg, uint32_t addr, int mode, uint8_t& data)
-{
-  nesMapper *m = (nesMapper *)arg;
-  
-  if (mode == 'r')
-    data = m->chraddr(addr);
-  else if (ppu.chwr)
-    m->chraddr(addr) = data;
-  return 0;
-}
-
-int dmaio(void *arg, uint32_t addr, int mode, uint8_t& data)
-{
-  if (mode != 'w')
-    return 0;
-  if (mode == 'w') {
-    dma_addr = data * 256;
-    dma_count = 256;
-    clockticks6502 += 512;
-  }
-  return 0;
-}
-
-int ntio(void *arg, uint32_t addr, int mode, uint8_t& data)
-{
-  if (mode == 'r')
-    data = ppu.nt[(addr >> 10) & 3][addr & 0x3FF];
-  else
-    ppu.nt[(addr >> 10) & 3][addr & 0x3FF] = data;
-  return 0;
-}
-
-int palio(void *arg, uint32_t addr, int mode, uint8_t& data)
-{
-  return memio(arg, addr, mode, data);
-}
-
-nescart::nescart(const char *file) : cart(file), mb(65536) {
+nescart::nescart(const char *file) : cart(file) {
   int offset = sizeof(*hdr);
-  int mappertype, i;
-  int chram = _RD;    /* readonly */
-
-  mb.init(0xffff);
+  int mappertype;
+  
   hdr = (nes_header *)data;
   if (hdr->mapper1 & D2) {
     // skip trainer
@@ -1309,7 +1045,6 @@ nescart::nescart(const char *file) : cart(file), mb(65536) {
     chrRomSz = 8192;
     chrRom = new uint8_t[chrRomSz]{0xAA};
     ppu.chwr = 1;
-    chram = _RW;
   }
   else {
     ppu.chwr = 0;
@@ -1319,64 +1054,31 @@ nescart::nescart(const char *file) : cart(file), mb(65536) {
 
   mappertype = (hdr->mapper1 >> 4) | (hdr->mapper2 & 0xF0);
   flogger(0, "NES Header\n");
-  flogger(0, " PRG RAM size: %5d\n", prgRamSz);
-  flogger(0, " PRG ROM size: %5d @ %x\n", prgRomSz, offset);
-  flogger(0, " CHR ROM size: %5d @ %x\n", chrRomSz, offset + prgRomSz);
-  flogger(0, " mapper: %.3d [%.2x %.2x]\n", mappertype, hdr->mapper1, hdr->mapper2);
+  flogger(0, " PRG RAM size: %d\n", prgRamSz);
+  flogger(0, " PRG ROM size: %d @ %x\n", prgRomSz, offset);
+  flogger(0, " CHR ROM size: %d @ %x\n", chrRomSz, offset + prgRomSz);
+  flogger(0, " mapper: %.2x [%.2x %.2x]\n", mappertype, hdr->mapper1, hdr->mapper2);
 
-  printf("size is: %x\n", prgRomSz);
-  romMask = 0x7fff;
-  if (prgRomSz < 0x8000)
-    romMask = 0x3fff;
-#if 0
   switch (mappertype) {
-  case 69:
-    mapper = new nesMapper69(chrRomSz, chrRom, prgRomSz, prgRom);
-    break;
   case 004:
-    mapper = new nesMapper004(chrRomSz, chrRom, prgRomSz, prgRom);
-    map004_init(mb, ppu, prgRom, prgRomSz, chrRom, chrRomSz);
-    break;
-  case 007:
-    mapper = new nesMapper007(chrRomSz, chrRom, prgRomSz, prgRom);
-    map007_init(mb, ppu, prgRom, prgRomSz, chrRom, chrRomSz);
+    nmap = new nesMapper004(chrRomSz, chrRom, prgRomSz, prgRom);
     break;
   case 002:
-    mapper = new nesMapper002(chrRomSz, chrRom, prgRomSz, prgRom);
-    map002_init(mb, ppu, prgRom, prgRomSz, chrRom, chrRomSz);
+    nmap = new nesMapper002(chrRomSz, chrRom, prgRomSz, prgRom);
     break;
   case 001:
-    mapper = new nesMapper001(chrRomSz, chrRom, prgRomSz, prgRom);
-    break;
-  case 0000:
-    mapper = new nesMapper(1, chrRomSz, chrRom, 1, prgRomSz, prgRom);
+    nmap = new nesMapper001(chrRomSz, chrRom, prgRomSz, prgRom);
     break;
   default:
-    exit(0);
+    nmap = new nesMapper(1, chrRomSz, chrRom, 1, prgRomSz, prgRom);
     break;
   }
-#endif
+  nmap->chr = chrRom;
+  nmap->prg = prgRom;
   
-  /* Add in CPU memory space */
-  mb.register_handler(0x0000, 0x1FFF, 0x07FF, memio, nesram, _RW, "RAM"); /* RAM Area */
-  mb.register_handler(0x2000, 0x3FFF, 0x2007, ppuio, &ppu,   _RW, "PPU");      /* PPU Registers */
-  mb.register_handler(0x4000, 0x4013, 0xFFFF, apuio, NULL,   _RW, "APU");      /* Sound HW */
-  mb.register_handler(0x4015, 0x4015, 0xFFFF, apuio, NULL,   _RW, "APU");      /* Sound HW */
-  mb.register_handler(0x4014, 0x4014, 0xFFFF, dmaio, this,   _RW, "DMA");      /* DMA */
-  mb.register_handler(0x4016, 0x4017, 0x0001, ctrlio,this,   _RW, "CTRL");     /* Input controller */
-  mb.register_handler(0x6000, 0x7FFF, 0x1FFF, memio, prgram, _RW, "PRGRAM");   /* PRG-RAM */
-  ppu.register_handler(0x2000, 0x3EFF, 0xFFFF, ntio,  NULL,  _RW, "NT");        /* Nametables */
+  ppu.chrRom = chrRom;
+  ppu.mapper = mapper;
 
-  mb.register_handler(0x8000,  0xFFFF, 0x7FFF, memio, prgRom, _RD, "PRG");      /* PRG ROM */
-  ppu.register_handler(0x0000, 0x1FFF, 0xFFFF, memio, chrRom, chram, "CHR");     /* CHR ROM or RAM */
-
-  for (i = 0x3F00; i <= 0x3FFF; i++) {
-    int pa = paladdr(i);
-    ppu.register_handler(i, i, 0x0000, palio, &ppu.palette[pa], 0, "palette");
-  }
-  mb.dump();
-  ppu.dump();
- 
   if (hdr->mapper1 & D3) {
     // 4-screen
     flogger(0, "4-screen\n");
@@ -1394,7 +1096,7 @@ nescart::nescart(const char *file) : cart(file), mb(65536) {
   }
 
   /* Setup our colors */
-  scr = new Screen(256, 240, 0, 10, 64, nespalette);
+  scr = new Screen(256, 240, 10, 30, 64, nespalette);
   scr->init();
 };
 
@@ -1538,18 +1240,15 @@ void nescart::dumpnt(int id)
 void nescart::drawpat(int x, int y, int base, int pid, int hm, int vm, int sprid, int xm) {
   uint16_t patlsb, patmsb, p;
   int i, j, clr[4], pclr, tx, ty;
-
+  
   clr[0] = ppu.read(0x3f00);
   clr[1] = ppu.read(0x3f01 + pid*4);
   clr[2] = ppu.read(0x3f02 + pid*4);
   clr[3] = ppu.read(0x3f03 + pid*4);
-  if (dwpat >= 0) {
-    base += dwpat * 4096;
-  }
   for (i = 0; i < 8; i++) {
-    if (dwpat > 0) {
-      patlsb = chrRom[base + i];
-      patmsb = chrRom[base + i + 8];
+    if (dwpat >= 0) {
+      patlsb = chrRom[(dwpat-1)*4096 + base + i];
+      patmsb = chrRom[(dwpat-1)*4096 + base + i + 8];
     }
     else {
       patlsb = ppu.read(base + i) ^ xm;
@@ -1572,24 +1271,60 @@ void nescart::drawpat(int x, int y, int base, int pid, int hm, int vm, int sprid
   }
 };
 
+int c_index;
+int c_strobe;
+int c_button;
+
+/* Read from a cartridge */
+uint8_t nescart::read(int addr)
+{
+  uint8_t data = 0xFF;
+  
+  if (mapper && mapper->read(addr, data)) {
+    return data;
+  }
+  switch (addr) {
+  case 0x0000 ... 0x1FFF:
+    // 2k RAM, mirrored
+    return nesram[addr & 0x7FF];
+  case 0x2000 ... 0x3FFF:
+    // PPU register
+    return ppu.readreg(addr & 0x2007);
+  case 0x6000 ... 0x7fff:
+  case 0x8000 ... 0xFFFF:
+    // Cartridge ROM
+    return nmap->prgaddr(addr);
+  case ppu::CTRLR1:
+  case ppu::CTRLR2:
+    flogger(1, "Get input %x %x %x %x\n", addr, strobe[addr %1], controller_state[addr % 1], controller[addr % 1]);
+    strobe[addr %1]++;
+    data = !!(controller_state[addr % 1] & 0x1);
+    controller_state[addr % 1] >>= 1;
+    return data | 0x40;
+  case 0x4000 ... 0x4013: case 0x4015:
+    return apu_read(addr);
+  default:
+    flogger(0,"Unknown cart addr: %x\n",addr);
+    return 0xFF;
+  }
+  return 0xFF;
+};
+
 #if 0
 /* APU:                                    silence
+
  *   4000: pulse1.control     DDLC.VVVV    30
+ *   4001: pulse1.sweep       EPPP.NSSS    08
+ *   4002: pulse1.timerlo     TTTT.TTTT    00
+ *   4003: pulse1.timerhi     LLLL.LTTT    00
+ *      11-bit counter (TTT.TTTTTTTT), tick every *APU* cycle
+ *      L=length counter halt (Reload?)
+ *      C=constant volume
  *      VVVV=0000 silence, VVVV=1111=maximum
  *      DD=00 0100.0000 12.5%
  *      DD=01 0110.0000 25%
  *      DD=10 0111.1000 50%
  *      DD=11 1001.1111 75% (-25%)
- *      L=length counter halt
- *      C=constant volume
- *   4001: pulse1.sweep       EPPP.NSSS    08
- *      E=enabled
- *      PPP=divider period half-frames
- *      N=negate (0=add to period, 1=subtract from period)
- *      SSS=shift count
- *   4002: pulse1.timerlo     TTTT.TTTT    00
- *   4003: pulse1.timerhi     LLLL.LTTT    00
- *      11-bit counter (TTT.TTTTTTTT), tick every *APU* cycle
  *      raw period = 11860.9/freq = 1
  *
  *   4004: pulse2.control     DDLC.VVVV    30
@@ -1699,6 +1434,7 @@ struct noisy {
   }
 };
 
+noisy noize;
 int nozetype;
 
 struct nesaudio {
@@ -1706,19 +1442,8 @@ struct nesaudio {
   const char *name;
   
   uint8_t  pattern;
-  struct {
-    int counter;
-    int reload;
-  } timer;
-  struct {
-    int enabled;
-    int counter;
-    int reload;
-  } length;
-  struct {
-    int counter;
-    int reload;
-  } linear;
+  int      counter;
+  int      reload  = -1;
 
   int      volume  = 0;
   int      enabled = 0;
@@ -1731,8 +1456,7 @@ struct nesaudio {
     freq = 440.0;
     phaseinc = freq * Tau / sampleRate;
   };
-  virtual int tick() {
-    return 0;
+  virtual void tick() {
   };
   virtual void write(int addr, uint8_t nv) {
     reg[addr & 3] = nv;
@@ -1744,13 +1468,35 @@ SDL_AudioDeviceID dev;
 const int min_samples = 8192;
 std::vector<int16_t> apu_queue;
 
-uint8_t LengthTable[] = {
-  10,254,20, 2 40, 4,80, 6,160, 8 60,10,14,12,26,14,
-  12, 16,24,18,48,20,96,22,192,24,72,26,16,28,32,30
+struct Triangle : public nesaudio
+{
+  Triangle(const char *n) {
+    name = n;
+  };
+  void write(int addr, uint8_t nv) {
+    switch (addr & 3) {
+    case 0x02:
+      // 400a: pulse1.timerlo     TTTT.TTTT
+      reload = (reload & 0xFF00) | nv;
+      break;
+    case 0x03:
+      // 400b: pulse1.timerhi     LLLL.LTTT    00
+      reload = (reload & 0x00FF) | ((nv & 7) << 8);
+      counter = reload;
+      fprintf(stderr, "%s: reloaded timer %d\n", name, reload);
+      break;
+    };
+  }
+  virtual void tick() {
+    if (enabled && counter-- == 0x0) {
+      counter = reload+1;
+      output  = (pattern & 1) * volume;
+      pattern = ((pattern >> 1) | (pattern << 7));
+    }
+  };
 };
 
 struct Pulse : public nesaudio {
-  uint8_t duty_cycle;
   Pulse(const char *n) {
     name = n;
   };
@@ -1759,83 +1505,34 @@ struct Pulse : public nesaudio {
     case 0x00:
       // 4000/4004: pulse1.control     DDLC.VVVV
       switch (nv & 0xC0) {
-      case 0x00: duty_cycle = 0b01000000; break;
-      case 0x40: duty_cycle = 0b01100000; break;
-      case 0x80: duty_cycle = 0b01111000; break;
-      case 0xC0: duty_cycle = 0b10011111; break;
+      case 0x00: pattern = 0b01000000; break;
+      case 0x40: pattern = 0b01100000; break;
+      case 0x80: pattern = 0b01111000; break;
+      case 0xC0: pattern = 0b10011111; break;
       }
-      length.halt = nv & D5;
       volume = reg[0] & 0x0F;
-      fprintf(stderr, "%s: reloaded volume/duty %d/%.2x\n", name, volume, duty);
-      break;
-    case 0x01:
-      // 4001: pulse1.sweep       EPPPNSSS
-      // 4005: pulse2.sweep       EPPPNSSS
+      fprintf(stderr, "%s: reloaded volume/pattern %d/%.2x\n", name, volume, pattern);
       break;
     case 0x02:
       // 4002: pulse1.timerlo     TTTT.TTTT
       // 4006: pulse2.timerlo     TTTT.TTTT
-      timer.reload = (reload & 0xFF00) | nv;
+      reload = (reload & 0xFF00) | nv;
       break;
     case 0x03:
-      // 4003: pulse1.timerhi     LLLL.LTTT
-      // 4007: pulse2.timerhi     LLLL.LTTT
-      timer.reload = (reload & 0x00FF) | ((nv & 7) << 8);
-      timer.counter = timer.reload;
-
-      length_counter = LengthTable[nv >> 5];
+      // 4003: pulse1.timerhi     LLLL.LTTT    00
+      // 4007: pulse2.timerhi     LLLL.LTTT    00
+      reload = (reload & 0x00FF) | ((nv & 7) << 8);
+      counter = reload;
       fprintf(stderr, "%s: reloaded timer %d\n", name, reload);
       break;
     }
   };
   void tick() {
-    if (!enabled)
-      return 0;
-    /* if counter expires, set new output bit */
-    if (timer.counter-- == 0x0) {
-      timer.counter = timer.reload+1;
-      output  = (duty & 1);
-      duty_cycle = ((duty_cycle >> 1) | (duty_cycle << 7));
-    }
-    return output;
-  };
-};
-
-struct Triangle : public nesaudio
-{
-  Triangle(const char *n) {
-    name = n;
-  };
-  void write(int addr, uint8_t nv) {
-    switch (addr & 3) {
-    case 0x00:
-      // 4008:
-      length.halt = (nv & D7);
-      linear.reload = (nv & 0x7F);
-      linear.counter = linear.reload;
-      break;
-    case 0x02:
-      // 400a: pulse1.timerlo     TTTT.TTTT
-      timer.reload = (reload & 0xFF00) | nv;
-      break;
-    case 0x03:
-      // 400b: pulse1.timerhi     LLLL.LTTT    00
-      timer.reload = (reload & 0x00FF) | ((nv & 7) << 8);
-      timer.counter = timer.reload;
-      length.counter = LengthTable[nv >> 5];
-      fprintf(stderr, "%s: reloaded timer %d\n", name, reload);
-      break;
-    };
-  }
-  virtual int tick() {
-    if (!enabled)
-      return 0;
-    if (timer.counter-- == 0x0) {
-      timer.counter = timer.reload+1;
-      output  = (pattern & 1);
+    if (enabled && counter-- == 0x0) {
+      counter = reload+1;
+      output  = (pattern & 1) * volume;
       pattern = ((pattern >> 1) | (pattern << 7));
     }
-    return output;
   };
 };
 
@@ -1946,6 +1643,9 @@ void apu_init()
   int rc;
 
   return;
+  noize.vol = 2000;
+  noize.f2t(440.0);
+  
   flogger(0, "APU init\n");
   SDL_zero(want);
   want.freq = sampleRate;
@@ -1960,75 +1660,154 @@ void apu_init()
   SDL_PauseAudio(1);
 }
 #endif
+void apu_init() {
+}
+void apu_write(int addr, uint8_t nv) {
+}
 
-/* Read from a cartridge */
-uint8_t nescart::read(int addr)
+#if 0
+void cart::setmap(int start, int end, int mask,
+		  uint8_t (*rfn)(void *arg, int addr),
+		  void (*wrfn)(void *arg, int addr, uint8_t nv),
+		  void *arg)
 {
-#if 1
-  uint8_t data;
-  
-  switch (addr) {
-  case 0x0000 ... 0x1fff:
-    return nesram[addr & 0x7ff];
-  case 0x2000 ... 0x3fff:
-    return ppu.readreg(addr & 0x2007);
-  case 0x4000 ... 0x4013:
-  case 0x4015:
-    return apu_read(addr);
-  case 0x4016 ... 0x4017:
-    ctrlio(this, addr, 'r', data);
-    return data;
-  case 0x6000 ... 0x7fff:
-    return prgram[addr & 0x1fff];
-  case 0x8000 ... 0xffff:
-    return prgRom[addr & romMask];
+  mapr_t m;
+
+  m.start = start;
+  m.end   = end;
+  m.mask  = mask;
+  m.read  = rfn;
+  m.write = wfn;
+  m.arg   = arg;
+  mapped.push_back(m);
+}
+
+uint8_t cart::read(int addr) {
+  for (m : mapped) {
+    if (addr >= m.start && addr <= m.end) {
+      return m.read(m.arg, addr);
+    }
   }
   return 0xff;
-#else
-  uint8_t data = 0xFF;
-  
-  /* Check mapper read */
-  if (mb.read(addr, data) == 0)
-    return data;
-  flogger(0, "unknown addr: %.4x\n", addr);
-  return 0xFF;
-#endif
+}
+void cart::write(int addr, uint8_t v) {
+  for (m : mapped) {
+    int ma = addr & m.mask;
+    if (ma >= m.start && ma <= m.end) {
+      m.write(m.arg, ma, v);
+    }
+  };
 };
+
+uint8_t rdram(void *arg, int addr) {
+  uint8_t *ram = arg;
+  return nesram[addr];
+}
+void wrram(void *arg, int addr, uint8_t v) {
+  uint8_t *ram = arg;
+  ram[addr] = v;
+};
+#endif
 
 /* Write to a cartridge */
 void nescart::write(int addr, uint8_t data) {
-#if 1
+  if (mapper && mapper->write(addr, data))
+    return;
   switch (addr) {
-  case 0x0000 ... 0x1fff:
-    nesram[addr & 0x7ff] = data;
+  case 0x0000 ... 0x1FFF:
+    // 2k RAM, mirrored
+    flogger(1, "write %x = %x\n", addr, data);
+    nesram[addr & 0x7FF] = data;
     break;
-  case 0x2000 ... 0x3fff:
+  case 0x2000 ... 0x3FFF:
+    // PPU register
     ppu.writereg(addr & 0x2007, data);
     break;
-  case 0x6000 ... 0x7fff:
-    prgram[addr & 0x1fff] = data;
+  case ppu::OAMDMA:
+    // PPU DMA
+    flogger(1, "DMA from %.4x/%x\n", data * 256, ppu.oamaddr);
+#if 0
+    dma_addr = data * 256;
+    dma_count = 256;
+#else
+    for (int i = 0; i < 256; i++)
+      ppu.oam[ppu.oamaddr++] = read(data * 256 + i);
+    for(int i = 0; i < 64; i++) {
+      flogger(1, "DMASprite: %d (%d,%d)\n", i, ppu.o_sprites[i].x, ppu.o_sprites[i].y);
+    }
+#endif
+    clockticks6502 += (clockticks6502 & 1) ? 514 : 513;
+    break;
+  case ppu::CTRLR1:
+  case ppu::CTRLR2:
+    if (!(data & 1)) {
+      controller_state[addr % 1] = controller[addr % 1];
+      controller[addr % 1] = 0;
+      strobe[addr % 1] = 0;
+    }
+    break;
+  case 0x4000 ... 0x4013: case 0x4015:
+    apu_write(addr, data);
+    break;
+  case 0x8000 ... 0xFFFF:
+    nmap->write(addr, data);
+    break;
+  default:
+    flogger(0,"nescart write unknown addr: %x\n", addr);
     break;
   }
-#else
-  if (mb.write(addr, data) == 0)
-    return;
-  flogger(0,"nescart write unknown addr: %x\n", addr);
-#endif
 };
 
-void nescart::setvblank()
+void nescart::gr_tick()
+{
+  /* Extra tick on odd frame start */
+  if ((frame & 1) && !clks && !scanline)
+    clks++;
+
+  switch (scanline) {
+  case 0 ... 239:
+    /* Eval sprites and background */
+    evalsprite();
+    evalbg();
+    break;
+  case SCANLINE_VBLANK:
+    // Set VBlank/NMI
+    if (clks == 1)
+      set_vblank();
+    break;
+  case SCANLINE_PRE:
+    // Clear Vblank/Sprite0/Sprite Overflow
+    if (clks == 1)
+      clr_vblank();
+    evalsprite();
+    evalbg();
+    break;
+  }
+  if (clks++ == 340) {
+    clks = 0;
+    if (scanline++ == SCANLINE_PRE) {
+      drawframe();
+      apu_run_frame();
+      _elapsed = 0;
+      scanline = 0;
+      frame++;
+    }
+  }
+}
+
+void nescart::set_vblank()
 {
   // Set Vblank
   flogger(0,"=== Set VBlank (%x)\n", ppu.ppuctrl & ppu::PPUCTRL_NMI);
   ppu.ppustatus |= ppu::PPUSTATUS_V;
   if (ppu.ppuctrl & ppu::PPUCTRL_NMI) {
-    flogger(0, "===================NMI!\n");
+    flogger(1, "===================NMI!\n");
+    clockticks6502 += 9;
     cpu_nmi();
-    _elapsed += 7;
   }
 }
 
-void nescart::clrvblank()
+void nescart::clr_vblank()
 {
   flogger(0,"==== Clear VBLank\n");
   ppu.ppustatus &= ~(ppu::PPUSTATUS_V|ppu::PPUSTATUS_O|ppu::PPUSTATUS_S);
@@ -2044,13 +1823,13 @@ void setmask(Screen *s, int key, uint8_t &k, uint8_t m)
   }
 }
 
-static time_t fpstime=time(NULL);
+time_t fpstime=time(NULL);
 
 void nescart::drawframe()
 {
   int dodraw = 00;
-
-  dodraw = 1;
+  static int sps;
+  
   if (ppu.ppumask & ppu::PPUMASK_SHOWBG) {
     if (dwpat >= 0) {
       /* Draw all patterns */
@@ -2064,14 +1843,14 @@ void nescart::drawframe()
 	  cy += 9;
 	}
       }
-      scr->scrtext(2, cy + 5, 0x31, "V:%d/%d PP:%d", dwpat, (chrRomSz / 4096), ppid);
+      scr->scrtext(2, cy + 5, 0x31, "V:%d PP:%d", dwpat, ppid);
       for (int i = 0; i < 4; i++) {
 	scr->scrrect(100 + i*9, cy + 5, 8, 8, ppu.read(0x3f00 + ppid * 4 + i));
       }
     }
     else if (nnid) {
       // draw our nametable
-#if 1
+#if 0
       drawnt(0, ppu.bgTbl, 0, 0);
       drawnt(1, ppu.bgTbl, 256, 0);
       drawnt(2, ppu.bgTbl, 0, 240);
@@ -2088,8 +1867,6 @@ void nescart::drawframe()
   if (ppu.ppumask & ppu::PPUMASK_SHOWSPRITE) {
 #if 0
     int i;
-    static int sps;
-    
     // index: tttttttn
     //   t = tile # 0..127
     //   n = bank (0x0000 or 0x1000)
@@ -2119,14 +1896,9 @@ void nescart::drawframe()
       /* 8x8 use PPUCTRL, 8x16 use bit 1 */
       if (ppu.spriteSz == 16) {
 	sbase = (tile & 1) ? 0x1000 : 0x0000;
-	if (ppu.o_sprites[i].attr & ATTR_V) {
-	  drawpat(ppu.o_sprites[i].x, ppu.o_sprites[i].y,   sbase + (tile | 0x01) * 16, spid, hm, vm, i, sps);
-	  drawpat(ppu.o_sprites[i].x, ppu.o_sprites[i].y+8, sbase + (tile & 0xFE) * 16, spid, hm, vm, i, sps);
-	}
-	else {
-	  drawpat(ppu.o_sprites[i].x, ppu.o_sprites[i].y,   sbase + (tile & 0xFE) * 16, spid, hm, vm, i, sps);
-	  drawpat(ppu.o_sprites[i].x, ppu.o_sprites[i].y+8, sbase + (tile | 0x01) * 16, spid, hm, vm, i, sps);
-	}
+	tile &= ~1;
+	drawpat(ppu.o_sprites[i].x, ppu.o_sprites[i].y,   sbase + (tile * 16),   spid, hm, vm, i, sps);
+	drawpat(ppu.o_sprites[i].x, ppu.o_sprites[i].y+8, sbase + (tile+1) * 16, spid, hm, vm, i, sps);
       }
       else {
 	sbase = ppu.spriteTbl;
@@ -2139,94 +1911,85 @@ void nescart::drawframe()
   if (dodraw) {
     time_t now = time(NULL);
     float fps = (float)frame / (now - fpstime);
-    scr->scrtext(0, scr->height+1, 0x31, "frame:%d fps:%.2f", frame, fps);
-    scr->scrtext(0, scr->height+10, 0x31, "v:%.4x b:%x s:%x", ppu.vramaddr, !!(ppu.ppuctrl & ppu::PPUCTRL_BGTBL), !!(ppu.ppuctrl & ppu::PPUCTRL_SPRITETBL));
+    scr->scrtext(0, scr->height+15, 0x31, "frame:%d fps:%.2f", frame, fps);
     scr->draw();
   }
   // draw CHR patterns
-  if (scr->KeyState['v']) {
-    dwpat = (dwpat + 2);
-    if (dwpat >= (chrRomSz / 4096))
-      dwpat=-2;
+  if (scr->key('v', true)) {
+    dwpat = (dwpat + 1);
+    if (dwpat == (chrRomSz / 4096))
+      dwpat=-1;
   }
   // Increment palette id (in chr pattern)
-  if (scr->KeyState['b']) {
+  if (scr->key('b', true)) {
     ppid = (ppid+1) % 8;
   }
   // Increment nametable displayed
-  if (scr->KeyState['n']) {
-    nnid = (nnid+1) % 3;
+  if (scr->key('n', true)) {
+    nnid ^= 1;
   }
-  // dump stack
-  if (scr->KeyState['p']) {
-    //stk->showstk(128);
+  // show full sprite
+  if (scr->key('f', true)) {
+    vk = (vk+1) % 16;
+    flogger(0, "set vk: %d\n", vk);
   }
-  if (scr->KeyState['y']) {
-    sreg ^= 1;
+  setmask(scr, 'x', controller[0], D0);
+  setmask(scr, 'z', controller[0], D1);
+  setmask(scr, 'a', controller[0], D2);
+  setmask(scr, 's', controller[0], D3);
+  setmask(scr, Key::K_UP, controller[0], D4);
+  setmask(scr, Key::K_DOWN, controller[0], D5);
+  setmask(scr, Key::K_LEFT, controller[0], D6);
+  setmask(scr, Key::K_RIGHT, controller[0], D7);
+
+#if 0
+  if (scr->KeyState['0']) {
+    noize.f2t(noize.freq - 10);
   }
-
-  controller[0] = 0;
-  setmask(scr, 'x', controller[0], D0);                   //A
-  setmask(scr, 'z', controller[0], D1);                   //B
-  setmask(scr, 'a', controller[0], D2);                   //SELECT
-  setmask(scr, 's', controller[0], D3);                   //START
-  setmask(scr, Key::K_UP, controller[0], D4);             //U
-  setmask(scr, Key::K_DOWN, controller[0], D5);           //D
-  setmask(scr, Key::K_LEFT, controller[0], D6);           //L
-  setmask(scr, Key::K_RIGHT, controller[0], D7);          //R
-}
-
-int bg_enabled(int x)
-{
-  if (!(ppu.ppumask & ppu::PPUMASK_SHOWBG))
-    return 0;
-  return (x >= 8 || (ppu.ppumask & ppu::PPUMASK_LEFTBG));
-}
-
-int sprite_enabled(int x)
-{
-  if (!(ppu.ppumask & ppu::PPUMASK_SHOWSPRITE))
-    return 0;
-  if (x >= 8)
-    return 1;
-  if (ppu.ppumask & ppu::PPUMASK_LEFTSPRITE)
-    return 1;
-  return 0;
+  if (scr->KeyState['1']) {
+    noize.f2t(noize.freq + 10);
+  }
+  if (scr->KeyState['2']) {
+    noize.vol = 0;
+  }
+  if (scr->KeyState['3']) {
+    noize.vol = 8000;
+  }
+  if (scr->KeyState['4']) {
+    nozetype = 0;
+  }
+  if (scr->KeyState['5']) {
+    nozetype = 1;
+  }
+  if (scr->KeyState['6']) {
+    nozetype = 2;
+  }
+  if (scr->KeyState['7']) {
+    nozetype = 3;
+  }
+#endif
 }
 
 void nescart::drawpixel()
 {
   int bgclr, spclr, pclr, pri;
-
-  if (hPos == 321) {
-    ppu.bk.clear();
-  }
-  if ((vPos < 340) && ((hPos >= 2 && hPos <= 255) || (hPos >= 321 && hPos <= 337))) {
+  
+  if (scanline < 340 && ((clks >= 1 && clks <= 257)) || (clks >= 321 && clks <= 337))  {
     /* Default to background color */
-    pclr = ppu.read(0x3F00);
+    pclr = ppu.read(0x3f00);
+    bgclr = ppu.bk.getpixel();
     spclr = pri = 0;
 
-    ppu.bk.enabled = (ppu.ppumask & ppu::PPUMASK_SHOWBG);
-    bgclr = ppu.bk.getpixel();
-    /* Check if we're not showing left pixels or being displayed */
-    if (!bg_enabled(hPos-2))
-      bgclr = 0;
-    if (hPos >= 2 && hPos <= 257) {
+    if (clks >=2 && clks <= 257) {
       // loop through all sprites, claim first
       for (int i = 0; i < nSprite; i++) {
 	pri = ppu.spr[i].attr & ATTR_P;
-	ppu.spr[i].enabled = 1;
-	flogger(1, "en:%d del:%d l:%.4x m:%.4x\n", ppu.spr[i].enabled, ppu.spr[i].delay, ppu.spr[i].patLsb, ppu.spr[i].patMsb); 
 	if (spclr == 0) {
 	  spclr = ppu.spr[i].getpixel();
-	  if (!sprite_enabled(hPos-2))
-	    spclr = 0;
 	  if (i == 0 && spclr && bgclr) {
 	    flogger(1, "sprite 0 hit\n");
 	    ppu.ppustatus |= ppu::PPUSTATUS_S;
 	  }
-	  if (spclr)
-	    spclr = spclr; //(0x3f10 + (rand() % 15));
 	} else {
 	  // still get ppixel to advance decrement regs
 	  ppu.spr[i].getpixel();
@@ -2241,16 +2004,12 @@ void nescart::drawpixel()
      *  1-3   0   X  BG
      *  1-3 1-3   1  BG
      */
-    if ((ppu.ppumask & ppu::PPUMASK_SHOWBG) == 0)
-      ;
-    else if ((!bgclr || !pri) && spclr)
+    if ((!bgclr || !pri) && spclr)
       pclr = ppu.read(spclr);
     else if (bgclr)
       pclr = ppu.read(bgclr);
-    if (vPos <= 239 && hPos <= 256) {
-      printf("setpixel: %d %d %d\n", hPos, vPos, pclr);
-      scr->setpixel(hPos-2, vPos, pclr);
-    }
+    if (scanline <= 239  && (clks <= 256))
+      scr->setpixel(clks-1, scanline, pclr);
   }
 }
 
@@ -2259,17 +2018,15 @@ void nescart::evalbg()
 {
   if ((ppu.ppumask & ppu::PPUMASK_SHOWBG) == 0)
     return;
-  printf("evalbg: %d %d\n", vPos, hPos);
-  if ((hPos >= 1 && hPos <= 256) || (hPos >= 321 && hPos <= 336)) { 
+  if ((clks >= 1 && clks <= 256) || (clks >= 321 && clks <= 336)) {
+    ppu.fetch(clks);
     drawpixel();
-    ppu.fetch(hPos);
   }
-  if (hPos == 256)
+  if (clks == 256)
     ppu.inc_vert();
-  else if (hPos == 257) {
+  else if (clks == 257)
     ppu.copyhorz();
-  }
-  else if (vPos == SCANLINE_PRE && (hPos >= 280 && hPos <= 304)) 
+  else if (scanline == SCANLINE_PRE && (clks >= 280 && clks <= 304)) 
     ppu.copyvert();
 }
 
@@ -2278,125 +2035,20 @@ void nescart::evalsprite()
 {
   if ((ppu.ppumask & ppu::PPUMASK_SHOWSPRITE) == 0)
     return;
-  if (vPos <= 239) {
-    if (hPos >= 1 && hPos <= 64) {
+  if (scanline <= 239) {
+    if (clks >= 1 && clks <= 64) {
       // secondary oam clear
     }
-    else if (hPos >= 65 && hPos <= 256) {
+    else if (clks >= 65 && clks <= 256) {
       // evaluate sprites for next line
     }
   }
-  if (hPos==257) {
-    nSprite = ppu.loadsprites(vPos);
+  if (clks==257) {
+    nSprite = ppu.loadsprites(scanline);
     if (nSprite > 0) {
-      flogger(1, "line: %d sprites = %d\n", vPos, nSprite);
+      flogger(1, "line: %d sprites = %d\n", scanline, nSprite);
     }
   };
-}
-
-enum {
-      NTBYTE = 0x01,
-      ATBYTE = 0x03,
-      PATLSB = 0x05,
-      PATMSB = 0x07,
-      SPRAT  = 0x13,
-      SPRLSB = 0x15,
-      SPRMSB = 0x17,
-};
-
-// 0.. 239      : VISIBLE
-//              : 0: Skip or IDLE
-//              : 1..255 [nt,at,lsb,msb,inch]
-//              : 256    [msb,incv]
-//              : 257    [copyh]
-//              : 258...320 idle
-//              : 257 .. 320 SPRITE
-//              : 321 .. 338 [nt,at,lsb,msb,inch]
-//              : 339 .. 338 [nt]
-// 240          : n/a
-// 241          : Set VBlank
-// 242 .. 260   : n/a
-// 261
-struct fetch {
-  int     addr;
-  uint8_t nt;
-  uint8_t at;
-  uint8_t lsb;
-  uint8_t msb;
-};
-
-void dofetch(int clk, fetch& f)
-{
-  int addr, v, fy, qb, what;
-
-  what = (clk % 8);
-  v = ppu.vramaddr;
-  fy = (v & ppu::FYMASK) >> 12;
-  if (clk >= 257 && clk < 321) {
-    what += 0x10;
-    qb = (clk - 257) / 8;
-  }
-  switch (what) {
-  case NTBYTE:
-    addr = 0x2000 + (v & 0xFFF);
-    f.nt = ppu.read(addr) * 16;
-    break;
-  case ATBYTE:
-    addr = 0x23C0 + (v & ppu::VHTAB) + ((v & ppu::ACYMASK) >> 4) + ((v & ppu::ACYMASK) >> 2);
-    qb   = ((v >> 4) & 0x4) + (v & 0x02);
-    f.at = (ppu.read(addr) >> qb) & 3;
-    break;
-  case PATLSB:
-    addr = ppu.bgTbl + f.nt + fy;
-    f.lsb = ppu.read(addr);
-    break;
-  case PATMSB:
-    addr = ppu.bgTbl + f.nt + fy + 8;
-    f.msb = ppu.read(addr);
-    break;
-  case SPRLSB:
-    break;
-  case SPRMSB:
-    break;
-  }
-}
-  
-void nescart::gr_tick()
-{
-  switch (vPos) {
-  case 0 ... 239:
-    /* Eval sprites and background */
-    evalsprite();
-    evalbg();
-    if (hPos == 260 && ppu.rendering() && mapper)
-      mapper->scanline();
-    break;
-  case SCANLINE_VBLANK: /* 241 */
-    // Set VBlank/NMI
-    if (hPos == 1) {
-      setvblank();
-    }
-    break;
-  case SCANLINE_PRE:    /* 261 */
-    // Clear Vblank/Sprite0/Sprite Overflow
-    if (hPos == 1)
-      clrvblank();
-    evalsprite();
-    evalbg();
-    break;
-  }
-  if (hPos++ == 340) {
-    hPos = 0;
-    if (vPos++ == SCANLINE_PRE) {
-      drawframe();
-      apu_run_frame();
-      _elapsed = 0;
-      vPos = 0;
-      if ((++frame & 1) && ppu.rendering()) {
-	hPos++;
-      }
-    }
-  }
 }
 
 /* 341 cycles x 262 scanlines = ppu.ticks 89342 (89341.5)
@@ -2408,9 +2060,12 @@ void nescart::gr_tick()
  */
 void nescart::run()
 {
+  int ctr=0;
+
   rdy = 1;
-  cpu_reset(0);
+  cpu_reset();
   apu_init();
+  ppu.ppustatus |= ppu::PPUSTATUS_V;
   for(;;) {
     /* Frame: odd frames are 1 clock shorter [skip] 
      * BGfetch
@@ -2449,15 +2104,16 @@ void nescart::run()
      * Sprite 0 hit where h=2
      * First pixel output at h=4
     */
-    if (dma_count > 0) {
-      ppu.oam[ppu.oamaddr++] = read(dma_addr++);
-      dma_count--;
+    if (((ctr++) % 3) == 0) {
+      if (dma_count > 0) {
+	ppu.oam[ppu.oamaddr++] = read(dma_addr++);
+	dma_count--;
+      }
+      else {
+	_elapsed += cpu_tick(1);
+      }
+      //apu_tick();
     }
-    uint32_t cc = clockticks6502;
-    cpu_tick(1);
-    _elapsed += (clockticks6502 - cc);
-    gr_tick();
-    gr_tick();
     gr_tick();
   }
 }
@@ -2472,5 +2128,4 @@ void getextra(char *s, int n, int addr)
     break;
   }
 }
-  
 

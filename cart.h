@@ -68,6 +68,9 @@ class nescart : public cart, crtc_t {
   uint8_t     nesram[0x800] = { 0 };
   uint8_t     prgram[0x2000] = { 0 };
  public:
+  mapper_t *mapper;
+  int strobe[2];
+  
   nescart(const char *);
   uint8_t read(int addr);
   void write(int addr, uint8_t data);
@@ -81,8 +84,8 @@ class nescart : public cart, crtc_t {
   void evalbg();
   void evalsprite();
   void drawpixel();
-  void setvblank();
-  void clrvblank();
+  void set_vblank();
+  void clr_vblank();
   void drawframe();
   int nSprite, dwpat=-2, nnid=0, ppid = 0, sps=0;
 
