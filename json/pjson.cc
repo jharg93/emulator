@@ -3,10 +3,6 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <assert.h>
-#include <vector>
-#include <map>
-#include <iostream>
 
 #include "genjson.h"
 #include "json_parser.h"

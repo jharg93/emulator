@@ -1,5 +1,10 @@
 #ifndef __json_parser_h__
 #define __json_parser_h__
+#include <assert.h>
+
+#include <map>
+#include <iostream>
+#include <vector>
 
 struct json_node {
   int type;
