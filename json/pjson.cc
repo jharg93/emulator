@@ -113,12 +113,12 @@ int parse_json(json_node *n) {
       ch = nextch(false);
     };
   }
-  else if (isdigit(ch)) {
+  else if (isalnum(ch)) {
     n->type = 's';
     do {
       n->string += ch;
       ch = nextch(false);
-    } while (isdigit(ch));
+    } while (isalnum(ch));
     lastch = ch;
   }
   else {
