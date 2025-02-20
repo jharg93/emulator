@@ -11,7 +11,7 @@
 #include "genjson.h"
 #include "json_parser.h"
 
-int pos, size, lastch = -1;
+int pos, size, level, lastch = -1;
 char *buffer;
 
 // scan for next character... if ws is true, skip whitespace
@@ -46,11 +46,13 @@ void parseDict(json_node *n) {
     return;
   }
   lastch = ch;
+  level++;
   do {
     json_node k={};
     json_node *v = new json_node;
     
     parse_json(&k);
+    printf("key: %s\n", k.string.c_str());
     ch = nextch(true, ":");
     if (ch < 0) {
       return;
@@ -60,6 +62,7 @@ void parseDict(json_node *n) {
 
     ch = nextch(true, "},");
   } while (ch >= 0 && ch != '}');
+  level--;
 }
 
 void parseList(json_node *n) {
@@ -70,12 +73,14 @@ void parseList(json_node *n) {
     return;
   }
   lastch = ch;
+  level++;
   do {
     auto j = new json_node;
     n->list.push_back(j);
     parse_json(j);
     ch = nextch(true, "],");
   } while (ch >= 0 && ch != ']');
+  level--;
 }
 
 int parse_json(json_node *n) {
@@ -87,7 +92,9 @@ int parse_json(json_node *n) {
     return 0;
   }
   if (ch == '[') {
+    printf("%4d %4x parse-list\n", level, pos);
     parseList(n);
+    printf("%4d %4x post-parse-list\n", level, pos);
   }
   else if (ch == '{') {
     parseDict(n);
@@ -130,7 +137,7 @@ void print_json(json_node *node, int lvl = 0) {
     std::cout << "[\n";
     for (auto i=0; i < node->list.size(); i++) {
       print_indent(lvl+1);
-      print2(node->list[i], lvl+1);
+      print_json(node->list[i], lvl+1);
       if (i < node->list.size() - 1) std::cout << ",";
       std::cout << "\n";
     }
@@ -142,36 +149,12 @@ void print_json(json_node *node, int lvl = 0) {
     for (auto it = node->map.begin(); it != node->map.end(); ++it) {
       print_indent(lvl+1);
       std::cout << "\"" << it->first << "\": ";
-      print2(it->second, lvl+1);
+      print_json(it->second, lvl+1);
       if (std::next(it) != node->map.end()) std::cout << ",";
       std::cout << "\n";
     }
     print_indent(lvl);
     std::cout << "}";
-  }
-}
-
-void print_json(json_node *n, int recurse) {
-  if (n->type == 's') {
-    printf("string: '%s'\n", n->string.c_str());
-  }
-  if (n->type == 'l') {
-    printf("list: %d entries\n", n->list.size());
-  }
-  if (n->type == 'd') {
-    if (recurse) {
-      for (auto v : n->map) {
-	printf("%s: ", v.first.c_str());
-	print_json(v.second, recurse);
-      }
-    }
-    else {
-      printf("dict: {");
-      for (auto v : n->map) {
-	printf(" %s, ", v.first.c_str());
-      }
-      printf("}\n");
-    }
   }
 }
 
@@ -306,7 +289,7 @@ void read_json(const char *file) {
     parse_json(&r);
   }
   printf("root type: %c\n", r.type);
-  print2(&r, 0);
+  print_json(&r, 0);
 }
 
 int main(int argc, char *argv[]) {
