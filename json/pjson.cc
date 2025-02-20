@@ -67,20 +67,11 @@ int getmem(json_node *n, uint8_t *mem, int flag) {
 void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32_t *)) {
   int fd, rc = 0;
   uint32_t prefetch[2];
-  
-  if ((fd = open(file, O_RDONLY)) < 0) {
-    exit(0);
-  }
-  size = lseek(fd, 0, SEEK_END);
-  buffer = new char[size];
-  pread(fd, buffer, size, 0);
-  close(fd);
-
-  // parse json */
+  JsonParser p;
   json_node r;
-  while (pos < size) {
-    parse_json(&r);
-  }
+
+  p.load(file);
+  p.Parse(&r);
   for (auto l : r.list) {
     int errors;
     
@@ -125,19 +116,11 @@ void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32
 }
 #else
 void read_json(const char *file) {
-  int fd;
-  
-  if ((fd = open(file, O_RDONLY)) < 0)
-    return;
-  size = lseek(fd, 0, SEEK_END);
-  buffer = new char[size];
-  pread(fd, buffer, size, 0);
-  close(fd);
-
+  JsonParser p;
   json_node r;
-  while (pos < size) {
-    parse_json(&r);
-  }
+  
+  p.load(file);
+  p.Parse(&r);
   print_json(&r, 0);
 }
 

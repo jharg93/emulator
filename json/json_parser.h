@@ -19,119 +19,135 @@ struct json_node {
   };
 };
 
-int pos, size, lastch = -1;
-char *buffer;
-
 int parse_json(json_node *n);
 void print_json(json_node *n, int);
 
-int nextch(bool ws, const char *expect = NULL) {
-  char ch;
+struct JsonParser {
+  int pos, size, lastch = -1;
+  char *buffer;
 
-  do {
-    if (lastch != -1) {
-      ch = lastch;
-      lastch = -1;
-    }
-    else if (pos >= size) {
-      return -1;
-    }
-    else {
-      ch = buffer[pos++];
-    }
-    if (!ws)
-      break;
-  } while (isspace(ch));
-  if (expect != NULL) {
-    assert(strchr(expect, ch) != NULL);
-  }
-  return ch;
-}
-
-void parseDict(json_node *n) {
-  auto ch = nextch(true);
-  n->type = 'd';
-  if (ch == '}' || ch < 0) {
-    // empty dict
-    return;
-  }
-  lastch = ch;
-  do {
-    json_node k={};
-    json_node *v = new json_node;
+  int load(const char *file) {
+    int fd;
     
-    parse_json(&k);
-    ch = nextch(true, ":");
-    if (ch < 0) {
+    if ((fd = open(file, O_RDONLY)) < 0) {
+      exit(0);
+    }
+    size = lseek(fd, 0, SEEK_END);
+    buffer = new char[size];
+    pread(fd, buffer, size, 0);
+    close(fd);
+  };
+  int nextch(bool ws, const char *expect = NULL) {
+    char ch;
+    
+    do {
+      if (lastch != -1) {
+	ch = lastch;
+	lastch = -1;
+      }
+      else if (pos >= size) {
+	return -1;
+      }
+      else {
+	ch = buffer[pos++];
+      }
+      if (!ws)
+	break;
+    } while (isspace(ch));
+    if (expect != NULL) {
+      assert(strchr(expect, ch) != NULL);
+    }
+    return ch;
+  };
+
+  void parseDict(json_node *n) {
+    auto ch = nextch(true);
+    n->type = 'd';
+    if (ch == '}' || ch < 0) {
+      // empty dict
       return;
     }
-    parse_json(v);
-    n->map[k.string] = v;
+    lastch = ch;
+    do {
+      json_node k={};
+      json_node *v = new json_node;
+      
+      parse_json(&k);
+      ch = nextch(true, ":");
+      if (ch < 0) {
+	return;
+      }
+      parse_json(v);
+      n->map[k.string] = v;
+      
+      ch = nextch(true);
+      if (ch == '}') {
+	break;
+      }
+      assert(ch == ',');
+    } while (true);
+  };
+
+  void parseList(json_node *n) {
+    auto ch = nextch(true);
+    n->type = 'l';
+    if (ch == ']' || ch < 0) {
+      // empty list
+      return;
+    }
+    lastch = ch;
+    do {
+      auto j = new json_node;
+      n->list.push_back(j);
+      parse_json(j);
+      ch = nextch(true);
+      if (ch == ']') {
+	// end-of-list
+	break;
+      }
+      assert(ch == ',');
+    } while (true);
+  };
+  int parse_json(json_node *n) {
+    char ch;
     
     ch = nextch(true);
-    if (ch == '}') {
-      break;
+    if (ch < 0) {
+      return 0;
     }
-    assert(ch == ',');
-  } while (true);
-}
-
-void parseList(json_node *n) {
-  auto ch = nextch(true);
-  n->type = 'l';
-  if (ch == ']' || ch < 0) {
-    // empty list
-    return;
-  }
-  lastch = ch;
-  do {
-    auto j = new json_node;
-    n->list.push_back(j);
-    parse_json(j);
-    ch = nextch(true);
-    if (ch == ']') {
-      // end-of-list
-      break;
+    if (ch == '[') {
+      parseList(n);
     }
-    assert(ch == ',');
-  } while (true);
-}
-
-int parse_json(json_node *n) {
-  char ch;
-  
-  ch = nextch(true);
-  if (ch < 0) {
-    return 0;
-  }
-  if (ch == '[') {
-    parseList(n);
-  }
-  else if (ch == '{') {
-    parseDict(n);
-  }
-  else if (ch == '\"') {
-    n->type = 's';
-    ch = nextch(false);
-    while (ch >= 0 && ch != '\"') {
-      n->string += ch;
+    else if (ch == '{') {
+      parseDict(n);
+    }
+    else if (ch == '\"') {
+      n->type = 's';
       ch = nextch(false);
-    };
-  }
-  else if (isalnum(ch)) {
-    n->type = 's';
-    do {
-      n->string += ch;
-      ch = nextch(false);
-    } while (isalnum(ch));
-    lastch = ch;
-  }
-  else {
-    printf("unknown... '%c' %x\n", ch, ch);
-    exit(1);
-  }
-  return 2;
-}
+      while (ch >= 0 && ch != '\"') {
+	n->string += ch;
+	ch = nextch(false);
+      };
+    }
+    else if (isalnum(ch)) {
+      n->type = 's';
+      do {
+	n->string += ch;
+	ch = nextch(false);
+      } while (isalnum(ch));
+      lastch = ch;
+    }
+    else {
+      printf("unknown... '%c' %x\n", ch, ch);
+      exit(1);
+    }
+    return 2;
+  };
+  void Parse(json_node *r) {
+    while (pos < size)
+      parse_json(r);
+  };
+};
 
 void print_json(json_node *node, int lvl) {
   if (!node){
