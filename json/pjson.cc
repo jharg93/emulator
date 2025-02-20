@@ -6,20 +6,13 @@
 #include <assert.h>
 #include <vector>
 #include <map>
+#include <iostream>
 
 #include "genjson.h"
+#include "json_parser.h"
 
-int pos, size, level, lastch = -1;
+int pos, size, lastch = -1;
 char *buffer;
-
-struct json_node {
-  int type;
-  std::string string;
-  std::vector<json_node *> list;
-  std::map<std::string, json_node *> map;
-};
-
-int parse_json(json_node *n);
 
 // scan for next character... if ws is true, skip whitespace
 int nextch(bool ws, const char *expect = NULL) {
@@ -53,7 +46,6 @@ void parseDict(json_node *n) {
     return;
   }
   lastch = ch;
-  level++;
   do {
     json_node k={};
     json_node *v = new json_node;
@@ -68,7 +60,6 @@ void parseDict(json_node *n) {
 
     ch = nextch(true, "},");
   } while (ch >= 0 && ch != '}');
-  level--;
 }
 
 void parseList(json_node *n) {
@@ -79,26 +70,21 @@ void parseList(json_node *n) {
     return;
   }
   lastch = ch;
-  level++;
   do {
     auto j = new json_node;
     n->list.push_back(j);
     parse_json(j);
     ch = nextch(true, "],");
   } while (ch >= 0 && ch != ']');
-  level--;
 }
 
 int parse_json(json_node *n) {
-  json_node root;
   char ch;
-  
+
+  assert(n != NULL);
   ch = nextch(true);
   if (ch < 0) {
     return 0;
-  }
-  if (n == NULL) {
-    n = &root;
   }
   if (ch == '[') {
     parseList(n);
@@ -108,10 +94,11 @@ int parse_json(json_node *n) {
   }
   else if (ch == '\"') {
     n->type = 's';
-    do {
+    ch = nextch(false);
+    while (ch >= 0 && ch != '\"') {
       n->string += ch;
       ch = nextch(false);
-    } while (ch != '\"');
+    }
   }
   else if (isdigit(ch)) {
     n->type = 's';
@@ -125,10 +112,46 @@ int parse_json(json_node *n) {
     printf("unknown... '%c' %x\n", ch, ch);
     exit(0);
   }
-  return 2;
 }
 
-void print_json(json_node *n) {
+void print_json(json_node *node, int lvl = 0) {
+  if (!node){
+    return;
+  }
+  auto print_indent = [&](int lvl) {
+    for (int i = 0; i < lvl; i++) {
+      std::cout << "  ";
+    }
+  };
+  if (node->type == 's') {
+    std::cout << "\"" << node->string << "\"";
+  }
+  else if (node->type == 'l') {
+    std::cout << "[\n";
+    for (auto i=0; i < node->list.size(); i++) {
+      print_indent(lvl+1);
+      print2(node->list[i], lvl+1);
+      if (i < node->list.size() - 1) std::cout << ",";
+      std::cout << "\n";
+    }
+    print_indent(lvl);
+    std::cout << "]";
+  }
+  else if (node->type == 'd') {
+    std::cout << "{\n";
+    for (auto it = node->map.begin(); it != node->map.end(); ++it) {
+      print_indent(lvl+1);
+      std::cout << "\"" << it->first << "\": ";
+      print2(it->second, lvl+1);
+      if (std::next(it) != node->map.end()) std::cout << ",";
+      std::cout << "\n";
+    }
+    print_indent(lvl);
+    std::cout << "}";
+  }
+}
+
+void print_json(json_node *n, int recurse) {
   if (n->type == 's') {
     printf("string: '%s'\n", n->string.c_str());
   }
@@ -136,11 +159,19 @@ void print_json(json_node *n) {
     printf("list: %d entries\n", n->list.size());
   }
   if (n->type == 'd') {
-    printf("dict: {");
-    for (auto v : n->map) {
-      printf(" %s, ", v.first.c_str());
+    if (recurse) {
+      for (auto v : n->map) {
+	printf("%s: ", v.first.c_str());
+	print_json(v.second, recurse);
+      }
     }
-    printf("}\n");
+    else {
+      printf("dict: {");
+      for (auto v : n->map) {
+	printf(" %s, ", v.first.c_str());
+      }
+      printf("}\n");
+    }
   }
 }
 
@@ -149,14 +180,18 @@ void print_json(json_node *n) {
 int getreg(json_node *n, rr_t *r, int flag) {
   uint32_t rv;
   int error = 0;
-  
+
+  if (!n) {
+    assert(0);
+  }
   while (r->name) {
     auto v = n->map[r->name];
 
-    rv = strtoull(v->string.c_str(), 0, 0);
+    rv = v->toint();
     if (flag == 0) {
       // store value to pointer
       *r->val = rv;
+      printf("%s <- %.8x\n", r->name, rv);
     }
     else if (flag == 1 && (rv != *r->val)) {
       // check if value is correct
@@ -168,8 +203,31 @@ int getreg(json_node *n, rr_t *r, int flag) {
   }
   return error;
 }
-void read_json(const char *file, rr_t *regread, void (*run)()) {
+int getmem(json_node *n, uint8_t *mem, int flag) {
+  int error = 0;
+  
+  for (auto v : n->list) {
+    // should be a list with two entries in it
+    assert(v->list.size() == 2);
+    uint32_t memaddr = v->list[0]->toint();
+    uint32_t rv = v->list[1]->toint();
+
+    if (flag == 0) {
+      mem[memaddr] = rv;
+      printf("%.8x <- %.2x\n", memaddr, rv);
+    }
+    else if (flag == 1 && (mem[memaddr] != rv)) {
+      printf(" assertion failure: %.8x %x!=%x\n",
+	     memaddr, mem[memaddr], rv);
+      error++;
+    }
+  }
+  return error;
+}
+
+void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32_t *)) {
   int fd;
+  uint32_t prefetch[2];
   
   if ((fd = open(file, O_RDONLY)) < 0)
     return;
@@ -183,20 +241,53 @@ void read_json(const char *file, rr_t *regread, void (*run)()) {
     parse_json(&r);
   }
   for (auto l : r.list) {
+    int errors;
+    
     auto name = l->map["name"];
     if (!name)
       continue;
     printf("test: %s\n", name->string.c_str());
-    
+
+    /* Get initial state */
     auto ini = l->map["initial"];
     if (!ini)
       continue;
-    getreg(ini->map["regs"], regread, 0);
+    if (ini->map.contains("regs")) {
+      getreg(ini->map["regs"], regread, 0);
+    }
+    else {
+      getreg(ini, regread, 0);
+    }
+    getmem(ini->map["ram"], mem, 0);
+    if (ini->map.contains("prefetch")) {
+      auto pf = ini->map["prefetch"];
+      uint32_t pf0 = pf->list[0]->toint();
+      uint32_t pf1 = pf->list[1]->toint();
+      prefetch[0] = pf0;
+      prefetch[1] = pf1;
+    }
 
+    /* Run cpu */
+    run(prefetch);
+    
+    /* Compare final state */
     auto fin = l->map["final"];
     if (!fin)
       continue;
-    getreg(fin->map["regs"], regread, 1);
+    errors = 0;
+    if (fin->map.contains("regs")) {
+      errors += getreg(fin->map["regs"], regread, 0);
+    }
+    else {
+      errors += getreg(fin, regread, 1);
+    }
+    errors += getmem(ini->map["ram"], mem, 1);
+    if (!errors) {
+      printf("PASS\n");
+    }
+    else {
+      printf("FAIL\n");
+    }
   }
 }
 #else
@@ -215,17 +306,7 @@ void read_json(const char *file) {
     parse_json(&r);
   }
   printf("root type: %c\n", r.type);
-  for (auto l : r.map) {
-    printf(" %s:\n", l.first.c_str());
-  }
-  for (auto l : r.list) {
-    printf(" %c\n", l->type);
-    if (l->type == 'd') {
-      for (auto v : l->map) {
-	printf("   %s\n", v.first.c_str());
-      }
-    }
-  }
+  print2(&r, 0);
 }
 
 int main(int argc, char *argv[]) {
