@@ -23,8 +23,8 @@ int parse_json(json_node *n);
 void print_json(json_node *n, int);
 
 struct JsonParser {
-  int pos, size, lastch = -1;
-  char *buffer;
+  int pos = 0, size = 0, lastch = -1;
+  char *buffer = NULL;
 
   int load(const char *file) {
     int fd;
