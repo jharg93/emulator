@@ -78,6 +78,7 @@ void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32
     auto name = l->map["name"];
     if (!name)
       continue;
+    printf("===========================\n");
     printf("test: %s\n", name->tostr());
 
     /* Get initial state */

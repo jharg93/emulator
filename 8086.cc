@@ -414,7 +414,7 @@ uint32_t segbase(int seg, uint16_t off, int spfx = 0)
     seg = spfx;
   }
   mrr_seg = sregs[seg & 7] << 4;
-  return mrr_seg + off;
+  return (mrr_seg + off) & 0xfffff;
 }
 
 void cpu_reset(uint32_t addr)
@@ -455,22 +455,6 @@ void cpu_push16(uint16_t v)
   auto sp = predec(SP, 2);
 
   return cpu_write16(segbase(rSS, sp), v, dstk::STACK);
-}
-
-static uint8_t cpu_fetch8()
-{
-  uint32_t addr = segbase(rCS, PC++);
-  assert(addr >= 0x400);
-  return cpu_read8(addr, dstk::CODE);
-}
-
-static uint16_t cpu_fetch16()
-{
-  uint16_t lo, hi;
-
-  lo = cpu_fetch8();
-  hi = cpu_fetch8();
-  return (hi << 8) + lo;
 }
 
 /* CPU I/O Handler */
@@ -611,6 +595,21 @@ void cpu_showregs() {
   zprintf("ss:%.4x ds:%.4x es:%.4x | ",
 	  SS, DS, ES);
   zprintf("%s | ", cpu_flagstr());
+}
+
+static uint8_t cpu_fetch8()
+{
+  uint32_t addr = segbase(rCS, PC++);
+  return cpu_read8(addr, dstk::CODE);
+}
+
+static uint16_t cpu_fetch16()
+{
+  uint16_t lo, hi;
+
+  lo = cpu_fetch8();
+  hi = cpu_fetch8();
+  return (hi << 8) + lo;
 }
 
 bool fontgb(uint8_t bits, int idx) { return ((bits << idx) & 0x80) != 0; }
@@ -4321,8 +4320,9 @@ int main(int argc, char *argv[])
 
   setdmp(zprintf);
 
-  cpu.init();
   if (!strcmp(argv[1], "-json")) {
+    cpu.ram = new uint8_t[0xFFFFFF]{};
+    mb.register_handler(0x00000, 0xFFFFFF, 0xFFFFFF, memio, cpu.ram, _RW, "RAMTEST");
     read_json(argv[2], rr, cpu.ram, runjson);
     exit(0);
   }
@@ -4334,6 +4334,7 @@ int main(int argc, char *argv[])
     exit(0);
   }
   //__asm__ __volatile__("mov $0x2233,%ax; add $0x3322,%ax");
+  cpu.init();
   switch (disksize) {
   case 320*1024:
     cpu_write8(0xf13fd, 0x8);
