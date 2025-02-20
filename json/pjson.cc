@@ -64,6 +64,11 @@ int getmem(json_node *n, uint8_t *mem, int flag) {
   return error;
 }
 
+// Run single-step processor tests
+// https://github.com/SingleStepTests/ProcessorTests
+//   mem points to memory buffer
+//   run executes code with possible prefetch
+//   rr_t contains list of register names and a pointer (uint32_t)
 void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32_t *)) {
   int fd, rc = 0;
   uint32_t prefetch[2];
@@ -89,10 +94,8 @@ void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32
     getmem(ini, mem, 0);
     if (ini->map.contains("prefetch")) {
       auto pf = ini->map["prefetch"];
-      uint32_t pf0 = pf->list[0]->toint();
-      uint32_t pf1 = pf->list[1]->toint();
-      prefetch[0] = pf0;
-      prefetch[1] = pf1;
+      prefetch[0] = pf->list[0]->toint();
+      prefetch[1] = pf->list[1]->toint();
     }
 
     /* Run cpu */
@@ -122,7 +125,7 @@ void read_json(const char *file) {
   
   p.load(file);
   p.Parse(&r);
-  print_json(&r, 0);
+  printf("r type: %c\n", r.type);
 }
 
 int main(int argc, char *argv[]) {

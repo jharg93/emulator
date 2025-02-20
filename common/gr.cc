@@ -736,16 +736,54 @@ void draw_gradient(Screen *scr,
   auto lerp = [](auto a, auto b, float t) {
     return a + (b - a) * t;
   };
+#if 0
+   auto draw_scanline = [&](int y, float x_start, float c_start, float x_end, float c_end) {
+    if (x_start > x_end) {
+      std::swap(x_start, x_end);
+      std::swap(c_start, c_end);
+    }
+    for (int x = std::ceil(x_start); x <= std::floor(x_end); ++x) {
+      float t = (x - x_start) / (x_end - x_start);
+      int color = lerp(c_start, c_end, t);
+      scr->setpixel(x, y, color);
+    }
+  };
 
+  // Split triangle into top and bottom parts
+  float t_split = (v1.y - v0.y) / (v2.y - v0.y);
+  Vec3 v_split(lerp(v0.x, v2.x, t_split), v1.y, lerp(v0.z, v2.z, t_split));
+
+  // Draw top part
+  for (int y = v0.y; y < v1.y; ++y) {
+    float t0 = (float)(y - v0.y) / (v1.y - v0.y);
+    float t1 = (float)(y - v0.y) / (v_split.y - v0.y);
+    float x_start = lerp(v0.x, v1.x, t0);
+    float c_start = lerp(v0.z, v1.z, t0);
+    float x_end = lerp(v0.x, v_split.x, t1);
+    float c_end = lerp(v0.z, v_split.z, t1);
+    draw_scanline(y, x_start, c_start, x_end, c_end);
+  }
+
+  // Draw bottom part
+  for (int y = v1.y; y <= v2.y; ++y) {
+    float t0 = (float)(y - v1.y) / (v2.y - v1.y);
+    float t1 = (float)(y - v_split.y) / (v2.y - v_split.y);
+    float x_start = lerp(v1.x, v2.x, t0);
+    float c_start = lerp(v1.z, v2.z, t0);
+    float x_end = lerp(v_split.x, v2.x, t1);
+    float c_end = lerp(v_split.z, v2.z, t1);
+    draw_scanline(y, x_start, c_start, x_end, c_end);
+  }
+#else
   auto edge_function = [](int x0, int y0, int x1, int y1, int x, int y) {
     return (y - y0) * (x1 - x0) - (x - x0) * (y1 - y0);
   };
-  
+
   int min_x = std::max(0, std::min({x0, x1, x2}));
   int max_x = std::min(scr->width - 1, std::max({x0, x1, x2}));
   int min_y = v0.y;
   int max_y = v2.y;
-  
+
   float area = edge_function(x0, y0, x1, y1, x2, y2);
 
   Vec3 _c0 = rgb2vec(c0);
@@ -756,7 +794,7 @@ void draw_gradient(Screen *scr,
       float w0 = edge_function(x1, y1, x2, y2, x, y);
       float w1 = edge_function(x2, y2, x0, y0, x, y);
       float w2 = edge_function(x0, y0, x1, y1, x, y);
-      
+
       if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
 	w0 /= area;
 	w1 /= area;
@@ -767,6 +805,7 @@ void draw_gradient(Screen *scr,
       }
     }
   }
+#endif
 };
 
 

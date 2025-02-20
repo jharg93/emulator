@@ -19,7 +19,6 @@ struct json_node {
   };
 };
 
-int parse_json(json_node *n);
 void print_json(json_node *n, int);
 
 struct JsonParser {
@@ -79,13 +78,8 @@ struct JsonParser {
       }
       parse_json(v);
       n->map[k.string] = v;
-      
-      ch = nextch(true);
-      if (ch == '}') {
-	break;
-      }
-      assert(ch == ',');
-    } while (true);
+      ch = nextch(true, "},");
+    } while (ch == ',');
   };
 
   void parseList(json_node *n) {
@@ -100,14 +94,10 @@ struct JsonParser {
       auto j = new json_node;
       n->list.push_back(j);
       parse_json(j);
-      ch = nextch(true);
-      if (ch == ']') {
-	// end-of-list
-	break;
-      }
-      assert(ch == ',');
-    } while (true);
+      ch = nextch(true, "],");
+    } while (ch == ',');
   };
+
   int parse_json(json_node *n) {
     char ch;
     
