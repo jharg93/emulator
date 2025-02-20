@@ -666,22 +666,23 @@ const uint8_t *genbpp(int *line, int w, const uint8_t *mem, const int bpp)
 }
 
 /* NES:
- *   getplane(line, 8, &chrom[id*16], 2, 1);
+ *   genplane(line, 8, &chrom[id*16], 2, 1);
  */
-const uint8_t *getplane(int *line, int w, const uint8_t *mem, const int bpp, int step) {
-  int mask;
-  
+const uint8_t *genplane(int *line, int w, const uint8_t *mem, const int bpp, int step) {
+  uint8_t mask = 0x80;
   for (int x = 0; x < w; x++) {
     *line = 0;
-    mask = 0x80 >> (x & 7);
     for (int p = 0; p < bpp; p++) {
       if (mem[p * step] & mask) {
 	*line |= (1 << p);
       }
     }
+    line++;
     if ((x & 7) == 7) {
       mem++;
     }
+    // rotate mask around
+    mask = (mask >> 1) | (mask << 7);
   }
   return mem;
 };

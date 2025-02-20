@@ -169,7 +169,8 @@ static inline int BGRRGB(int p)
   return MKRGB(r,g,b);
 }
 
-const uint8_t *genbpp(int *, int, const uint8_t *, const int);
+const uint8_t *genbpp(int *line, int, const uint8_t *, const int);
+const uint8_t *genplane(int *line, int w, const uint8_t *mem, const int bpp, int step);
 
 void drawline(Screen *s, int *line, int w, int sx, int sy, int pb);
 void draw_bpp(Screen *, int w, int h, const uint8_t *m, const int pb, const int bpp);

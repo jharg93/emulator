@@ -445,9 +445,10 @@ void cpu_write8(const uint32_t addr, uint8_t val, int type)
 
 uint16_t cpu_pop16()
 {
-  auto sp = postinc(SP, 2);
+  uint32_t addr = segbase(rSS, SP);
   
-  return cpu_read16(segbase(rSS, sp), dstk::STACK);
+  SP += 2;
+  return cpu_read16(addr, dstk::STACK);
 }
 
 void cpu_push16(uint16_t v)
@@ -948,7 +949,7 @@ void drawtext(int cols, int rows, int border, uint32_t flags, const uint8_t *mem
  * |          |-+
  * +----------+
  *======================*/
-void drawplane(int width, int height, uint8_t *mem, int (*pmap)(int p), int nplanes, int planestep)
+void drawplane(int width, int height, const uint8_t *mem, int (*pmap)(int p), int nplanes, int planestep)
 {
   int pxl, clr;
 
@@ -957,17 +958,12 @@ void drawplane(int width, int height, uint8_t *mem, int (*pmap)(int p), int npla
   else
     scr->xs = 1;
   for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x += 8) {
-      for (int j = 0; j < 8; j++) {
-	clr = 0;
-	for (int p = 0; p < nplanes; p++) {
-	  pxl = mem[p * planestep];
-	  clr |= (pxl & (0x80 >> j)) ? (1 << p) : 0x00;
-	}
-	scr->setpixel(EX + x + j, EY + y, pmap(clr));
-      }
-      mem++;
+    int line[width];
+    mem = genplane(line, width, mem, nplanes, planestep);
+    for (int x = 0; x < width; x++) {
+      line[x] = pmap(line[x]);
     }
+    drawline(scr, line, width, EX, EY + y, 0);
   }
 }
 
@@ -975,11 +971,11 @@ void drawgraphics(int width, int height, const uint8_t *mem, int (*pmap)(int p),
 {
 #if 1
   if (width == 160)
-    scr->xs = 1;
+    scr->xs = 3;
   else if (width == 320)
-    scr->xs = 2;
+    scr->xs = 3;
   else
-    scr->xs = 1;
+    scr->xs = 2;
 #endif
   int line[width];
   for (int y = y0; y < height; y += ystep) {
@@ -1096,9 +1092,11 @@ void x86::drawscreen()
     /* VGA 320x200x256 */
     bpp = vidcfg->bpp();
     drawgraphics(320, 200, vidptr(0xA0000), vgaclr, bpp, 0, 1);
+    hexdump(vidptr(0xa0000), 512, 32);
   }
   else if (vidmode == 0x0d) {
     /* EGA 320x200x16 [sq -e] */
+    scr->xs = 2;
     drawplane(w, h, vidptr(0xA0000), egaclr, 4, 65536);
   }
   else if (vidmode == 0x10) {
@@ -1160,6 +1158,7 @@ void x86::drawscreen()
     }
   }
   zprintf("-- frame: %d %ld\n", frame, cycs);
+  scr->setpalette(255, 0xff, 0xff, 0xff);
   scr->scrtext(0, scr->height+2, 255, "frm:%d fps:%.2f", frame, fps);
   scr->scrtext(0, scr->height+10,255, "vm:%.2x %.4x %.4x\n", vidmode, crtc_modesel, crtc_status);
 
@@ -2194,8 +2193,8 @@ void x86::init()
   cgapal[255].g = 0xff;
   cgapal[255].b = 0xff;
   scr = new Screen(640+EX*2, 200+EY*2, 10, 80, 256, cgapal);
-  scr->xs = 1;
-  scr->ys = 1;
+  scr->xs = 2;
+  scr->ys = 3;
   scr->init();
 
   /* Override int10 and int21 */
@@ -3974,7 +3973,6 @@ int cpu_step()
       zprintf("ACK: %.2x\n", op);
       assert(opc.mnem);
     }
-    printf("   %.2x %s\n", op, opc.mnem);
 
     /* get mrr byte and opfn */
     if (opc.flag & MRR) {
@@ -4148,7 +4146,7 @@ void dumpcfg(uint8_t *data, size_t size)
 	off += 1;
       }
     }
-    zprintf("%.4x: %.2x %s\n", start, op, xdis(op, opc.mnem, data, off, rep));
+    //zprintf("%.4x: %.2x %s\n", start, op, xdis(op, opc.mnem, data, off, rep));
     jpos = -1;
 
     // hack x87 codes
@@ -4297,7 +4295,7 @@ void runjson(uint32_t *prefetch) {
   PC = ssr[4];
   eflags = ssr[5];
 
-  trace=3;
+  trace=0;
   SPC = PC;
   cpu_step();
 
@@ -4320,7 +4318,7 @@ int main(int argc, char *argv[])
 
   setdmp(zprintf);
 
-  if (!strcmp(argv[1], "-json")) {
+  if (argc > 1 && !strcmp(argv[1], "-json")) {
     cpu.ram = new uint8_t[0xFFFFFF]{};
     mb.register_handler(0x00000, 0xFFFFFF, 0xFFFFFF, memio, cpu.ram, _RW, "RAMTEST");
     read_json(argv[2], rr, cpu.ram, runjson);

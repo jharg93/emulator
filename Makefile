@@ -1,6 +1,6 @@
 LXCPP = clang++
 SDLFLAGS = -DGR -D_SDL `sdl2-config --cflags --libs`
-CFLAGS = -std=c++20 -Wall -ggdb3 -Icpu -Icommon -I. ${SDLFLAGS} -O3
+CFLAGS = -std=c++20 -Wall -ggdb3 -Icpu -Icommon -I. ${SDLFLAGS} -O0
 
 STDC = common/bus.cc common/gr.cc common/util.cc common/cpu.cc
 STDH = $(STDC) common/bus.h common/gr.h common/util.h Makefile

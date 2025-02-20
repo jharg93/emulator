@@ -397,8 +397,12 @@ static arg_t mkimm(int val) {
   return TYPE_IMM + val;
 };
 
-static arg_t mkmem(uint32_t off, uint16_t delta) {
-  return DBR + off + delta;
+static arg_t mkmem(uint32_t off, uint16_t delta, bool dbr=true) {
+  if (dbr) {
+    off += DBR;
+  }
+  printf("mkmem: %x\n", off + delta);
+  return off + delta;
 }
 
 static arg_t getarg(int arg, bool _8bit)
@@ -432,9 +436,9 @@ static arg_t getarg(int arg, bool _8bit)
     lo = cpu_fetch8() + _Y;
     return mkmem(0, lo);
   case ABL:   // long [nnnnnn]
-    return mkmem(cpu_fetch24(), 0);
+    return mkmem(cpu_fetch24(), 0, false);
   case ABLX:   // long,X [nnnnnn+x]
-    return mkmem(cpu_fetch24(), _X);
+    return mkmem(cpu_fetch24(), _X, false);
   case IXZ: // [16[d:nn]]
     addr = cpu_fetch8();
     return PBR + cpu_read16(DBR+addr);
@@ -452,7 +456,7 @@ static arg_t getarg(int arg, bool _8bit)
     return cpu_read24(DBR+addr) + _Y;
   case DPS: // [nn+S]
     addr = cpu_fetch8();
-    return addr + _S;
+    return (addr + _S) & 0xFFFF;
   case ISY: // [16[nn+s]+y]
     addr = cpu_fetch8() + _S;
     return cpu_read16(addr) + _Y;

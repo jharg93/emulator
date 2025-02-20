@@ -26,6 +26,7 @@ int getreg(json_node *n, rr_t *r, int flag) {
     if (flag == 0) {
       // store value to pointer
       *r->val = rv;
+      printf("%s=%x\n", r->name, rv);
     }
     else if (flag == 1 && (rv != *r->val)) {
       // check if value is correct

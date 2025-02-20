@@ -1442,7 +1442,8 @@ void genframe()
 
 int trace = 0;
 
-#include "json/thjson.cc"
+#define PJSON
+#include "json/pjson.cc"
 
 #define CLIP(x) ((x) & 0x2000 ? ((x) | ~0x3ff) : ((x) & 0x3FF))
 #define mm(x) ((x) & ~0x3f)
@@ -1622,6 +1623,60 @@ void ppu_t::runhdma(int y)
 
 snes_crtc sc(&ppu);
 
+uint32_t ssr[32];
+struct rr_t readreg[] = {
+  { "pc", &ssr[0] },
+  { "s", &ssr[1] },
+  { "p", &ssr[2] },
+  { "a", &ssr[3] },
+  { "x", &ssr[4] },
+  { "y", &ssr[5] },
+  { "dbr", &ssr[6] },
+  { "d", &ssr[7] },
+  { "pbr", &ssr[8] },
+  { "e", &ssr[9] },
+  { },
+};
+
+void runjson(uint32_t *p) {
+  cpu_setflags(ssr[2]);
+  PC = ssr[0];
+  _S = ssr[1];
+  _A = ssr[3];
+  _X = ssr[4];
+  _Y = ssr[5];
+  _D = ssr[7];
+  fE = ssr[9];
+  DBR = ssr[6] << 16;
+  PBR = ssr[8] << 16;
+  if (fE) {
+    _S = (_S & 0xff) + 0x100;
+  }
+  if (_A == 0xbf46) {
+    printf("break\n");
+  }
+
+  SPC = PC;
+  trace=3;
+  cpu_step();
+  cpu_showregs();
+  printf("\n");
+
+  ssr[2] = cpu_getflags();
+  ssr[0] = PC;
+  ssr[1] = _S;
+  if (fE) {
+    ssr[1] = (ssr[1] & 0xFF) + 0x100;
+  }
+  ssr[3] = _A;
+  ssr[4] = _X;
+  ssr[5] = _Y;
+  ssr[7] = _D;
+  ssr[9] = fE;
+  ssr[6] = DBR >> 16;
+  ssr[8] = PBR >> 16;
+}
+
 int main(int argc, char *argv[])
 {
   size_t sz = 0;
@@ -1630,7 +1685,10 @@ int main(int argc, char *argv[])
   const char *sramsz[] = { "off", "16k", "64k", "256k" };
 
   if (argc > 4) {
-    read_json(argv[1]);
+    uint8_t *mem = new uint8_t[0x1000000]{0};
+    mmu.register_handler(0x000000, 0xFFFFFF, 0xFFFFFF, memio, mem, _RW, "ram");
+    mkop();
+    read_json(argv[1], readreg, mem, runjson);
     exit(0);
   }
   cart = loadrom(argv[1], sz);
