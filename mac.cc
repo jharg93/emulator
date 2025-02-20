@@ -1661,7 +1661,58 @@ void getextra(dstk& s, uint32_t base, uint32_t size)
   }
 }
 
-#include "json/68kjson.cc"
+#define PJSON
+#include "json/pjson.cc"
+
+static uint32_t tmpsr;
+rr_t regread[] = {
+  { "d0", &D[0] },
+  { "d1", &D[1] },
+  { "d2", &D[2] },
+  { "d3", &D[3] },
+  { "d4", &D[4] },
+  { "d5", &D[5] },
+  { "d6", &D[6] },
+  { "d7", &D[7] },
+  { "a0", &A[0] },
+  { "a1", &A[1] },
+  { "a2", &A[2] },
+  { "a3", &A[3] },
+  { "a4", &A[4] },
+  { "a5", &A[5] },
+  { "a6", &A[6] },
+  { "ssp",&ssp },
+  { "usp",&usp },
+  { "pc", &PC },
+  { "sr", &tmpsr },
+  { },
+};
+
+void runjson(uint32_t *prefetch) {
+  uint16_t op;
+
+  SR = tmpsr;
+  if (SR & 0x2000){
+    SP = ssp;
+  } else {
+    SP = usp;
+  }
+  trace=3;
+  cpu_write16be(PC, prefetch[0]);
+  cpu_write16be(PC+2, prefetch[1]);
+  SPC = PC;
+  op = cpu_fetch(Word);
+  printf("decode: %.4x %.8x\n", op, PC);
+  decode_68k(op);
+  tmpsr = SR;
+  if (SR & 0x2000) {
+    ssp = SP;
+  }
+  else {
+    usp = SP;
+  }
+}
+
 int main(int argc, char *argv[])
 {
   size_t sz;
@@ -1670,7 +1721,10 @@ int main(int argc, char *argv[])
 
   gentbl();
   if (argc > 2) {
-    read_json("test.json");
+    const int memsize = 0x1000000;
+    uint8_t *mem = new uint8_t[memsize]{0};
+    sys.register_handler(0x000000, 0xFFFFFF, 0xFFFFFF, memio, mem, _RW, "ram");
+    read_json("test.json", regread, mem, runjson);
   }
   // Load disk image
   buf = loadrom(DISK, sz);

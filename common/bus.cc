@@ -155,13 +155,14 @@ void setbank(bank_t *b, int nb, const char *lbl)
     lbl = b->name;
   if (nb < 0)
     nb += b->nbank;
-  if (nb >= b->nbank) {
+  if (nb < 0 || nb >= b->nbank) {
     fprintf(stdout, "ERROR: %s bank out of range %d/%d\n", lbl, nb, b->nbank);
-    nb %= b->nbank;
+    nb = 0;
   }
   if (b->bank != (nb * b->banksz)) {
     flogger(0, "setbank[%s] %d/%d\n", lbl, nb, b->nbank);
     b->bank = nb * b->banksz;
+    b->pbank = &b->pbase[nb * b->banksz];
   }
 }
 
@@ -172,13 +173,17 @@ void setbank(bank_t *b, int nb, const char *lbl)
  *  int bsz        : Size of each bank ( <= size)
  *  int nb         : Value to initialize
  */
-void initbank(bank_t *b, uint8_t *mem, int memsz, int bsz, int sb, const char *name)
+void initbank(bank_t *b, uint8_t *mem, int memsz, int banksz, int sb, const char *name)
 {
-  b->base   = mem;
-  b->nbank  = memsz / bsz;
-  b->banksz = bsz;
+  if (mem == NULL) {
+    mem = new uint8_t[memsz]{};
+  }
+  b->pbase  = mem;
+  b->pbank  = mem;
+  b->nbank  = memsz / banksz;
+  b->banksz = banksz;
   b->name   = name;
-  fprintf(stdout, "Initbank[%s]: %3d banks of %.8x = %.8x\n", name, b->nbank, bsz, memsz);
+  fprintf(stdout, "Initbank[%s]: %3d banks of %.8x = %.8x\n", name, b->nbank, banksz, memsz);
   setbank(b, sb);
 }
 
@@ -188,7 +193,7 @@ int bankio(void *arg, uint32_t offset, int mode, iodata_t& data)
   bank_t *b = (bank_t *)arg;
 
   /* Addr should already be properly masked out */
-  return memio(b->base, b->bank + offset, mode, data);
+  return memio(b->pbank, offset, mode, data);
 }
 
 /* Setbank based on address */

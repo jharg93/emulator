@@ -60,7 +60,8 @@ int memio(void *arg, uint32_t addr, const int mode, iodata_t&data);
 
 struct bank_t {
   const char *name;
-  uint8_t    *base;       // memory base
+  uint8_t    *pbase;      // memory base
+  uint8_t    *pbank;      // bank base
   int         nbank;      // total number of banks
   int         banksz;     // size of bank
   int         bank;       // current bank number

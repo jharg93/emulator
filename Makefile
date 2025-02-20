@@ -1,6 +1,6 @@
 LXCPP = clang++
 SDLFLAGS = -DGR -D_SDL `sdl2-config --cflags --libs`
-CFLAGS = -std=c++20 -Wall -ggdb3 -Icpu -Icommon -I. ${SDLFLAGS}
+CFLAGS = -std=c++20 -Wall -ggdb3 -Icpu -Icommon -I. ${SDLFLAGS} -O3
 
 STDC = common/bus.cc common/gr.cc common/util.cc common/cpu.cc
 STDH = $(STDC) common/bus.h common/gr.h common/util.h Makefile
@@ -26,10 +26,10 @@ c64: c64.cc $(STDH) cpu/cpu_6502.cc $(STDC)
 ppc: cpu/cpu_ppc.cc common/bus.cc common/cpu.cc
 	$(LXCPP) $(CFLAGS) -o ppc cpu/cpu_ppc.cc common/bus.cc common/cpu.cc common/util.cc
 
-8086: 8086.cc $(STDH) emit.cc $(STDC)
+8086: 8086.cc $(STDH) emit.cc json/pjson.cc $(STDC)
 	$(LXCPP) $(CFLAGS) -o 8086 8086.cc -mavx2 $(STDC)
 
-mac: mac.cc $(STDC)
+mac: mac.cc $(STDC) json/pjson.cc
 	$(LXCPP) $(CFLAGS) -o mac mac.cc $(STDC)
 
 amiga: amiga.cc $(STDC)

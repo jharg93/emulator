@@ -79,8 +79,8 @@ extern int trace;
 int paused;
 
 /* Size of each 'pixel' */
-#define XSCALE 3
-#define YSCALE 3
+#define XSCALE 2
+#define YSCALE 2
 
 /* Colors for the grid */
 palclr redPxl = { 128, 0, 0 };
@@ -685,7 +685,90 @@ const uint8_t *getplane(int *line, int w, const uint8_t *mem, const int bpp, int
   }
   return mem;
 };
-    
+
+struct Vec3 {
+  float x, y, z;
+  Vec3(float _x=0, float _y=0, float _z=0) {
+    x = _x;
+    y = _y;
+    z = _z;
+  };
+  Vec3 operator-(const Vec3 &rhs) const {
+    return Vec3(x - rhs.x, y - rhs.y, z - rhs.z);
+  };
+  Vec3 operator+(const Vec3 &rhs) const {
+    return Vec3(x + rhs.x, y + rhs.y, z + rhs.z);
+  };
+  Vec3 operator*(const float s) const {
+    return Vec3(x*s, y*s, z*s);
+  };
+  Vec3 operator/(const float s) const {
+    return Vec3(x/s, y/s, z/s);
+  };
+};
+
+Vec3 rgb2vec(int c) {
+  return Vec3((c >> 16) & 0xFF, (c >> 8) & 0xff, c & 0xff);
+};
+
+int vec2rgb(Vec3 c) {
+  return ((int)c.x << 16) + ((int)c.y << 8) + ((int)c.z);
+};
+
+void draw_gradient(Screen *scr,
+		   int x0, int y0, int c0,
+		   int x1, int y1, int c1,
+		   int x2, int y2, int c2)
+{
+  Vec3 v0(x0, y0, c0);
+  Vec3 v1(x1, y1, c1);
+  Vec3 v2(x2, y2, c2);
+
+  if (v0.y > v1.y) {
+    std::swap(v0, v1);
+  }
+  if (v1.y > v2.y) {
+    std::swap(v1, v2);
+  }
+  if (v0.y > v1.y) {
+    std::swap(v0, v1);
+  }
+  auto lerp = [](auto a, auto b, float t) {
+    return a + (b - a) * t;
+  };
+
+  auto edge_function = [](int x0, int y0, int x1, int y1, int x, int y) {
+    return (y - y0) * (x1 - x0) - (x - x0) * (y1 - y0);
+  };
+  
+  int min_x = std::max(0, std::min({x0, x1, x2}));
+  int max_x = std::min(scr->width - 1, std::max({x0, x1, x2}));
+  int min_y = v0.y;
+  int max_y = v2.y;
+  
+  float area = edge_function(x0, y0, x1, y1, x2, y2);
+
+  Vec3 _c0 = rgb2vec(c0);
+  Vec3 _c1 = rgb2vec(c1);
+  Vec3 _c2 = rgb2vec(c2);
+  for (int y = min_y; y <= max_y; ++y) {
+    for (int x = min_x; x <= max_x; ++x) {
+      float w0 = edge_function(x1, y1, x2, y2, x, y);
+      float w1 = edge_function(x2, y2, x0, y0, x, y);
+      float w2 = edge_function(x0, y0, x1, y1, x, y);
+      
+      if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+	w0 /= area;
+	w1 /= area;
+	w2 /= area;
+	
+	Vec3 color = _c0 * w0 + _c1 * w1 + _c2 * w2;
+	scr->setpixel(x, y, vec2rgb(color));
+      }
+    }
+  }
+};
+
 
 void draw_bpp(Screen *scr, int w, int h, const uint8_t *mem, const int pb, const int bpp)
 {

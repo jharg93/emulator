@@ -190,6 +190,11 @@ inline void xline(int *p, int w, int c) {
   }
 };
 
+void draw_gradient(Screen *scr,
+		   int x0, int y0, int c0,
+		   int x1, int y1, int c1,
+		   int x2, int y2, int c2);
+
 /* emulate a crtc */
 #include "crtc.h"
 

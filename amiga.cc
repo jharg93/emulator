@@ -2856,7 +2856,11 @@ void amiga::drawframe()
 	       screen.x0, screen.y0, screen.x1, screen.y1, ds, de, count,
 	       count * 16, screen.y1 - screen.y0, 1L << bpu);
   scr->scrtext(0, h + 40, WHITE, "frame:%d fps:%.2f wdma:%d", frame, fps, wdma);
-	       
+
+  draw_gradient(scr, 100, 100, 0xFF0000,
+		200,150, 0x00FFFF,
+		125, 170, 0x555500);
+
   scr->draw();
   scr->clear();
 }

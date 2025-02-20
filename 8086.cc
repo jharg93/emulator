@@ -417,8 +417,6 @@ uint32_t segbase(int seg, uint16_t off, int spfx = 0)
   return mrr_seg + off;
 }
 
-#define CSIP segbase(rCS, PC)
-
 void cpu_reset(uint32_t addr)
 {
 }
@@ -956,9 +954,9 @@ void drawplane(int width, int height, uint8_t *mem, int (*pmap)(int p), int npla
   int pxl, clr;
 
   if (width == 320)
-    scr->xs = 4;
-  else
     scr->xs = 2;
+  else
+    scr->xs = 1;
   for (int y = 0; y < height; y++) {
     for (int x = 0; x < width; x += 8) {
       for (int j = 0; j < 8; j++) {
@@ -978,11 +976,11 @@ void drawgraphics(int width, int height, const uint8_t *mem, int (*pmap)(int p),
 {
 #if 1
   if (width == 160)
-    scr->xs = 8;
+    scr->xs = 1;
   else if (width == 320)
-    scr->xs = 4;
-  else
     scr->xs = 2;
+  else
+    scr->xs = 1;
 #endif
   int line[width];
   for (int y = y0; y < height; y += ystep) {
@@ -1106,8 +1104,8 @@ void x86::drawscreen()
   }
   else if (vidmode == 0x10) {
     /* EGA 640x350x16 */
-    scr->xs = 2;
-    scr->ys = 2;
+    scr->xs = 1;
+    scr->ys = 1;
     drawplane(w, h, vidptr(0xA0000), egaclr, 4, 65536);
   }
   else if (crtc_mode()) {
@@ -1704,7 +1702,7 @@ static int vidio(void *arg, const uint32_t addr, int mode, iodata_t& val)
     else {
       c->crtc_status &= ~0x88;
     }
-    retrace = (retrace + 1) % 1000;
+    retrace = (retrace + 1) % 500;
     if (mode == 'r') {
       val = c->crtc_status | 0x01; // | 0x01;
     }
@@ -1723,11 +1721,13 @@ static int vidio(void *arg, const uint32_t addr, int mode, iodata_t& val)
       printf("  write dac2: %.2x.%x: %.2x\n", pi, c->pal_index % 3, val);
       if (pi >= 255)
 	break;
+#if 1
       switch (c->pal_index % 3) {
       case 0: c->pal_clrs[pi].r = val << 2; break;
       case 1: c->pal_clrs[pi].g = val << 2; break;
       case 2: c->pal_clrs[pi].b = val << 2; break;
       }
+#endif
       c->pal_index++;
       
       c->pal_clrs[255].r = 0xff;
@@ -2195,8 +2195,8 @@ void x86::init()
   cgapal[255].g = 0xff;
   cgapal[255].b = 0xff;
   scr = new Screen(640+EX*2, 200+EY*2, 10, 80, 256, cgapal);
-  scr->xs = 2;
-  scr->ys = 3;
+  scr->xs = 1;
+  scr->ys = 1;
   scr->init();
 
   /* Override int10 and int21 */
@@ -2922,6 +2922,8 @@ static uint32_t ea16(uint8_t rrr, int16_t mem)
 }
 
 /* pre-decode opcode argument */
+#define CSIP segbase(rCS, PC)
+
 arg_t getarg(uint32_t arg, uint32_t op)
 {
   const int ggg = mrr_ggg(mrr);
@@ -3956,9 +3958,9 @@ int cpu_step()
   mrr_base = 0;
   if (SPC < 1024*1024)
     visited[SPC] = 1;
+
   for(;;) {
     op = cpu_fetch8();
-
     /* count # of opcodes */
     opcnt[op]++;
     if (op == 0x0f) {
@@ -3973,6 +3975,7 @@ int cpu_step()
       zprintf("ACK: %.2x\n", op);
       assert(opc.mnem);
     }
+    printf("   %.2x %s\n", op, opc.mnem);
 
     /* get mrr byte and opfn */
     if (opc.flag & MRR) {
@@ -4265,7 +4268,51 @@ uint8_t *getdma(uint32_t addr) {
   return &cpu.ram[addr];
 };
 
-#include "json/88json.cc"
+#define PJSON
+#include "json/pjson.cc"
+
+uint32_t ssr[10];
+struct rr_t rr[] = {
+  { "ax", &regs[0].d },
+  { "cx", &regs[1].d },
+  { "dx", &regs[2].d },
+  { "bx", &regs[3].d },
+  { "sp", &regs[4].d },
+  { "bp", &regs[5].d },
+  { "si", &regs[6].d },
+  { "di", &regs[7].d },
+  { "cs", &ssr[0] },
+  { "ss", &ssr[1] },
+  { "ds", &ssr[2] },
+  { "es", &ssr[3] },
+  { "ip", &ssr[4] },
+  { "flags", &ssr[5] },
+  { },
+};
+
+void runjson(uint32_t *prefetch) {
+  CS = ssr[0];
+  SS = ssr[1];
+  DS = ssr[2];
+  ES = ssr[3];
+  PC = ssr[4];
+  eflags = ssr[5];
+
+  trace=3;
+  SPC = PC;
+  cpu_step();
+
+  SPC = PC;
+  cpu_showregs();
+  printf("\n");
+  ssr[0] = CS;
+  ssr[1] = SS;
+  ssr[2] = DS;
+  ssr[3] = ES;
+  ssr[4] = PC;
+  ssr[5] = eflags | 0xf000;
+}
+
 int main(int argc, char *argv[])
 {
   //parse_json("8088test/00.json");
@@ -4274,6 +4321,11 @@ int main(int argc, char *argv[])
 
   setdmp(zprintf);
 
+  cpu.init();
+  if (!strcmp(argv[1], "-json")) {
+    read_json(argv[2], rr, cpu.ram, runjson);
+    exit(0);
+  }
   for (int i = 0xf0000; i <= 0xfffff; i++) {
     visited[i] = 1;
   }
@@ -4282,7 +4334,6 @@ int main(int argc, char *argv[])
     exit(0);
   }
   //__asm__ __volatile__("mov $0x2233,%ax; add $0x3322,%ax");
-  cpu.init();
   switch (disksize) {
   case 320*1024:
     cpu_write8(0xf13fd, 0x8);
