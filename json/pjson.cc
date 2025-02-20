@@ -14,7 +14,6 @@
 int pos, size, level, lastch = -1;
 char *buffer;
 
-// scan for next character... if ws is true, skip whitespace
 int nextch(bool ws, const char *expect = NULL) {
   char ch;
 
@@ -59,9 +58,14 @@ void parseDict(json_node *n) {
     }
     parse_json(v);
     n->map[k.string] = v;
-
-    ch = nextch(true, "},");
-  } while (ch >= 0 && ch != '}');
+    
+    ch = nextch(true);
+    if (ch == '}') {
+      break;
+    }
+    printf("dict nextch: %c\n", ch);
+    assert(ch == ',');
+  } while (true);
   level--;
 }
 
@@ -78,23 +82,25 @@ void parseList(json_node *n) {
     auto j = new json_node;
     n->list.push_back(j);
     parse_json(j);
-    ch = nextch(true, "],");
-  } while (ch >= 0 && ch != ']');
+    ch = nextch(true);
+    if (ch == ']') {
+      // end-of-list
+      break;
+    }
+    assert(ch == ',');
+  } while (true);
   level--;
 }
 
 int parse_json(json_node *n) {
   char ch;
-
-  assert(n != NULL);
+  
   ch = nextch(true);
   if (ch < 0) {
     return 0;
   }
   if (ch == '[') {
-    printf("%4d %4x parse-list\n", level, pos);
     parseList(n);
-    printf("%4d %4x post-parse-list\n", level, pos);
   }
   else if (ch == '{') {
     parseDict(n);
@@ -105,7 +111,7 @@ int parse_json(json_node *n) {
     while (ch >= 0 && ch != '\"') {
       n->string += ch;
       ch = nextch(false);
-    }
+    };
   }
   else if (isdigit(ch)) {
     n->type = 's';
@@ -117,11 +123,12 @@ int parse_json(json_node *n) {
   }
   else {
     printf("unknown... '%c' %x\n", ch, ch);
-    exit(0);
+    exit(1);
   }
+  return 2;
 }
 
-void print_json(json_node *node, int lvl = 0) {
+void print_json(json_node *node, int lvl) {
   if (!node){
     return;
   }
@@ -288,7 +295,6 @@ void read_json(const char *file) {
   while (pos < size) {
     parse_json(&r);
   }
-  printf("root type: %c\n", r.type);
   print_json(&r, 0);
 }
 
@@ -298,3 +304,4 @@ int main(int argc, char *argv[]) {
   }
 }
 #endif
+
