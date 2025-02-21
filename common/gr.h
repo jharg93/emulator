@@ -124,6 +124,7 @@ class Screen {
 
   int  getpixel(int x, int y);
   void setpixel(int x, int y, color c);
+  void rawpixel(int x, int y, color c);
   void setpalette(int, const palclr *);
   void setpalette(int, int, int, int);
   void drawbits(int x, int y, uint8_t bits, uint8_t *map, int n, int fg, int bg, int trans);
@@ -134,6 +135,9 @@ class Screen {
   void clrmem(int clr = 0);
   void scrtext(int x, int y, int clr, const char *str, ...);
   void drawglyph(const uint8_t *bmp, int fontHeight, int x, int y, int fg, int bg, bool (*gb)(uint8_t, int) = NULL);
+  void rawpixel(int x, int y, int c) {
+    scrBuf[(y * width) + x] = c;
+  };
 
   void init(int cm=0);
 

@@ -2307,7 +2307,10 @@ void cpu_write(uint32_t addr, uint32_t val, int size) {
 }
 
 void cpu_push16(uint16_t v) {
-  cpu_write16(sp_dec(2), v, dstk::STACK);
+  uint32_t addr = sp_dec(2);
+  
+  printf("push: %x %x\n", addr, v);
+  cpu_write16(addr, v, dstk::STACK);
 }
 
 uint16_t cpu_pop16() {
@@ -2315,7 +2318,10 @@ uint16_t cpu_pop16() {
 }
 
 void cpu_push32(uint32_t v) {
-  cpu_write32(sp_dec(4), v, dstk::STACK);
+  uint32_t addr = sp_dec(4);
+  
+  printf("push: %x %x\n", addr, v);
+  cpu_write32(addr, v, dstk::STACK);
 }
 
 uint32_t cpu_pop32() {

@@ -689,10 +689,7 @@ const uint8_t *genplane(int *line, int w, const uint8_t *mem, const int bpp, int
 
 struct Vec3 {
   float x, y, z;
-  Vec3(float _x=0, float _y=0, float _z=0) {
-    x = _x;
-    y = _y;
-    z = _z;
+  Vec3(float _x=0, float _y=0, float _z=0) : x(_x), y(_y), z(_z) {
   };
   Vec3 operator-(const Vec3 &rhs) const {
     return Vec3(x - rhs.x, y - rhs.y, z - rhs.z);
@@ -706,6 +703,23 @@ struct Vec3 {
   Vec3 operator/(const float s) const {
     return Vec3(x/s, y/s, z/s);
   };
+  // dot product
+  float dot(const Vec3& rhs) const {
+    return (x*rhs.x) + (y*rhs.y) + (z*rhs.z);
+  };
+  Vec3 cross(const Vec3& rhs) const {
+    return Vec3(y * rhs.z - z * rhs.y,
+		z * rhs.x - x * rhs.z,
+		x * rhs.y - y * rhs.x);
+  };
+};
+
+struct Mtx3 {
+  Vec3 v[3];
+  // matrix x vector operation
+  Vec3 operator*(const Vec3& rhs) const {
+    return Vec3(v[0].dot(rhs), v[1].dot(rhs), v[2].dot(rhs));
+  };
 };
 
 Vec3 rgb2vec(int c) {
@@ -716,97 +730,58 @@ int vec2rgb(Vec3 c) {
   return ((int)c.x << 16) + ((int)c.y << 8) + ((int)c.z);
 };
 
+struct Point {
+  Point(int _x = 0, int _y = 0) {
+    x = _x;
+    y = _y;
+  };
+  Point operator-(const Point& rhs) const {
+    return Point(x - rhs.x, y - rhs.y);
+  };
+  auto cross(const Point& rhs) const {
+    return (x * rhs.y) - (y * rhs.x);
+  };
+  int x, y;
+};
+
+// https://jtsorlinis.github.io/rendering-tutorial/
 void draw_gradient(Screen *scr,
 		   int x0, int y0, int c0,
 		   int x1, int y1, int c1,
 		   int x2, int y2, int c2)
 {
-  Vec3 v0(x0, y0, c0);
-  Vec3 v1(x1, y1, c1);
-  Vec3 v2(x2, y2, c2);
-
-  if (v0.y > v1.y) {
-    std::swap(v0, v1);
-  }
-  if (v1.y > v2.y) {
-    std::swap(v1, v2);
-  }
-  if (v0.y > v1.y) {
-    std::swap(v0, v1);
-  }
-  auto lerp = [](auto a, auto b, float t) {
-    return a + (b - a) * t;
+  // shoelace formula for calculating area = cross product
+  auto edge_function = [](const Point& p0, const Point &p1, const Point &p2) {
+    // return (p1.x - p0.x) * (p2.y - p0.x) - (p1.y - p0.y) * (p2.x - p0.x)
+    //   cross product of (p1-p0) and (p2 - p0)
+    const Point a = p1 - p0;
+    const Point b = p2 - p0;
+    return a.cross(b);
   };
-#if 0
-   auto draw_scanline = [&](int y, float x_start, float c_start, float x_end, float c_end) {
-    if (x_start > x_end) {
-      std::swap(x_start, x_end);
-      std::swap(c_start, c_end);
-    }
-    for (int x = std::ceil(x_start); x <= std::floor(x_end); ++x) {
-      float t = (x - x_start) / (x_end - x_start);
-      int color = lerp(c_start, c_end, t);
-      scr->setpixel(x, y, color);
-    }
-  };
+  int min_x = std::min({x0, x1, x2, 0});
+  int min_y = std::min({y0, y1, y2, 0});
+  int max_x = std::max({x0, x1, x2, scr->tw});
+  int max_y = std::max({y0, y1, y2, scr->th});
 
-  // Split triangle into top and bottom parts
-  float t_split = (v1.y - v0.y) / (v2.y - v0.y);
-  Vec3 v_split(lerp(v0.x, v2.x, t_split), v1.y, lerp(v0.z, v2.z, t_split));
-
-  // Draw top part
-  for (int y = v0.y; y < v1.y; ++y) {
-    float t0 = (float)(y - v0.y) / (v1.y - v0.y);
-    float t1 = (float)(y - v0.y) / (v_split.y - v0.y);
-    float x_start = lerp(v0.x, v1.x, t0);
-    float c_start = lerp(v0.z, v1.z, t0);
-    float x_end = lerp(v0.x, v_split.x, t1);
-    float c_end = lerp(v0.z, v_split.z, t1);
-    draw_scanline(y, x_start, c_start, x_end, c_end);
+  Point p0(x0, y0);
+  Point p1(x1, y1);
+  Point p2(x2, y2);
+  float area = edge_function(p0, p1, p2);
+  if (area == 0) {
+    return;
   }
-
-  // Draw bottom part
-  for (int y = v1.y; y <= v2.y; ++y) {
-    float t0 = (float)(y - v1.y) / (v2.y - v1.y);
-    float t1 = (float)(y - v_split.y) / (v2.y - v_split.y);
-    float x_start = lerp(v1.x, v2.x, t0);
-    float c_start = lerp(v1.z, v2.z, t0);
-    float x_end = lerp(v_split.x, v2.x, t1);
-    float c_end = lerp(v_split.z, v2.z, t1);
-    draw_scanline(y, x_start, c_start, x_end, c_end);
-  }
-#else
-  auto edge_function = [](int x0, int y0, int x1, int y1, int x, int y) {
-    return (y - y0) * (x1 - x0) - (x - x0) * (y1 - y0);
-  };
-
-  int min_x = std::max(0, std::min({x0, x1, x2}));
-  int max_x = std::min(scr->width - 1, std::max({x0, x1, x2}));
-  int min_y = v0.y;
-  int max_y = v2.y;
-
-  float area = edge_function(x0, y0, x1, y1, x2, y2);
-
-  Vec3 _c0 = rgb2vec(c0);
-  Vec3 _c1 = rgb2vec(c1);
-  Vec3 _c2 = rgb2vec(c2);
-  for (int y = min_y; y <= max_y; ++y) {
-    for (int x = min_x; x <= max_x; ++x) {
-      float w0 = edge_function(x1, y1, x2, y2, x, y);
-      float w1 = edge_function(x2, y2, x0, y0, x, y);
-      float w2 = edge_function(x0, y0, x1, y1, x, y);
-
-      if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-	w0 /= area;
-	w1 /= area;
-	w2 /= area;
-	
-	Vec3 color = _c0 * w0 + _c1 * w1 + _c2 * w2;
-	scr->setpixel(x, y, vec2rgb(color));
+  Point p;
+  const Mtx3 clr = {rgb2vec(c0),rgb2vec(c1),rgb2vec(c2)};
+  for (p.y = min_y; p.y <= max_y; p.y++) {
+    for (p.x = min_x; p.x <= max_x; p.x++) {
+      Vec3 w = Vec3(edge_function(p1, p2, p),
+		    edge_function(p2, p0, p),
+		    edge_function(p0, p1, p)) / area;
+      if (w.x >= 0 && w.y>= 0 && w.z >= 0) {
+	scr->rawpixel(p.x, p.y, vec2rgb(clr * w));
       }
     }
   }
-#endif
 };
 
 

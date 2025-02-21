@@ -26,11 +26,10 @@ int getreg(json_node *n, rr_t *r, int flag) {
     if (flag == 0) {
       // store value to pointer
       *r->val = rv;
-      printf("%s=%x\n", r->name, rv);
     }
     else if (flag == 1 && (rv != *r->val)) {
       // check if value is correct
-      printf("  assertion failure: %s %x!=%x\n",
+      printf("  assertion failure: %s %.2x!=%.2x\n",
 	     r->name, *r->val, rv);
       error++;
     }
@@ -52,9 +51,9 @@ int getmem(json_node *n, uint8_t *mem, int flag) {
     uint32_t memaddr = v->list[0]->toint();
     uint32_t rv = v->list[1]->toint();
 
+    //printf("  %.8x <- %.2x\n", memaddr, rv);
     if (flag == 0) {
       mem[memaddr] = rv;
-      printf("  %.8x <- %.2x\n", memaddr, rv);
     }
     else if (flag == 1 && (mem[memaddr] != rv)) {
       printf("  assertion failure: %.8x %x!=%x\n",
@@ -126,7 +125,7 @@ void read_json(const char *file) {
   
   p.load(file);
   p.Parse(&r);
-  printf("r type: %c\n", r.type);
+  print_json(&r, 0);
 }
 
 int main(int argc, char *argv[]) {

@@ -89,6 +89,9 @@ struct cia_t {
       cia_irq.enable(val & 0x7f, val & 0x80);
       break;
     case CiaReg::CRA:
+      /* +-----+-----+-----+-----+-----+-----+-----+-----+
+       * |     |smode|imode|load |onest|omode|pmode|start|
+       * +-----+-----+-----+-----+-----+-----+-----+-----+*/
       regs[CRA] = val;
       if ((val & 0b11100110) != 0)  {
 	printf("cia%d: cra icky\n", id);
@@ -99,16 +102,18 @@ struct cia_t {
       tmra.settimer(tmra_freq, !(val & 0x8), (val & 0x1), "tmra");
       break;
     case CiaReg::CRB:
-      // alrm|imod|imod|load|rmod|omod|pron|strt
+      /* +-----+-----+-----+-----+-----+-----+-----+-----+
+       * |alarm|    imode  |load |onest|omode|pmode|start|
+       * +-----+-----+-----+-----+-----+-----+-----+-----+*/
       regs[CRB] = val;
-      if ((val & 0b11100110) != 0)  {
+      if ((val & 0b01100110) != 0)  {
 	printf("cia%d: crb icky\n", id);
       }
-      printf("cia%d: crb %.2x %s [%s]\n", id, val, sbits8("AIILOops", val),
-	     crb_mode[(val>>5) & 3]);
       if (val & 0x80) {
 	printf("cia CRB ALARM!\n");
       }
+      printf("cia%d: crb %.2x %s [%s]\n", id, val, sbits8("AIILOops", val),
+	     crb_mode[(val>>5) & 3]);
       tmrb_freq = tlatch(CiaReg::TBLO);
       tmrb.settimer(tmrb_freq, !(val & 0x8), (val & 0x1), "tmrb");
       break;

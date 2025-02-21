@@ -1679,7 +1679,7 @@ constexpr fastbltfn fbtab[] = {
 
 constexpr uint32_t bltfn(uint8_t fn, uint32_t a, uint32_t b, uint32_t c)
 {
-#if 1
+#if 0
   return fb(fn, a, b, c);
 #else
   return fbtab[fn](a,b,c);
@@ -2550,6 +2550,7 @@ void amiga::chip_write(uint32_t addr, uint32_t val, int n)
     break;
   case DMACON: // dma control
     xsetclr(dmaconr, val, "dmacon");
+    showbits(dmaconr, bits_dmaconr, "dmaconr");
     break;
   case ADKCON: // disk control
     xsetclr(adkconr, val, "adkcon");
@@ -2857,9 +2858,9 @@ void amiga::drawframe()
 	       count * 16, screen.y1 - screen.y0, 1L << bpu);
   scr->scrtext(0, h + 40, WHITE, "frame:%d fps:%.2f wdma:%d", frame, fps, wdma);
 
-  draw_gradient(scr, 0, 200, 0xFF0000,
+  draw_gradient(scr, 180, 250, 0xFF0000,
 		100,0, 0x0000FF,
-		200, 200, 0x00FF00);
+		200, 125, 0x00FF00);
 
   scr->draw();
   scr->clear();
