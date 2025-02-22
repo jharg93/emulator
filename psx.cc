@@ -26,15 +26,6 @@ Screen *screen;
 void _drawgpu();
 
 //https://stackoverflow.com/questions/69447778/fastest-way-to-draw-filled-quad-triangle-with-the-sdl2-renderer
-#ifndef OPENGL
-#define glColor3ub(a,b,c)
-#define glVertex2f(a,b)
-#define glBegin(x)
-#define glEnd()
-#define glFlush()
-#define glMatrixMode(x)
-#define glLoadIdentity()
-#endif
 
 /* I/O Register Space
  * 1F801000 ... 1F803FFF
@@ -175,7 +166,7 @@ void dumpdma()
  *  6: OTC
  */
 
-  /* Mirrors 0x00, 0x80, 0xA0
+/* Mirrors 0x00, 0x80, 0xA0
  * 00.000000 2048k Main RAM
  * 1F.000000 8192k Expansion Region 1 [ROM/RAM]
  * 1F.800000 1K    Scratchpad RAM
@@ -931,6 +922,13 @@ enum {
 
   GPUDATA   = 0x1810,
   GPUSTATUS = 0x1814,
+
+  ATTR_MASK = 0x1F,
+  ATTR_RAW = 0x01,
+  ATTR_TRANSP = 0x02,
+  ATTR_TEXTURE = 0x04,
+  ATTR_QUAD = 0x08,
+  ATTR_SHADED = 0x10,
 };
 
 #define GPU_COMMAND(x) (((x) >> 24) & 0xFF)
@@ -938,27 +936,27 @@ enum {
 /* GP0 commands */
 struct kv gp0[] = {
   // 0010.0000 mono3
-  // 0010.0010 mono3
+  // 0010.0010 mono3, trans
   // 0010.1000 mono4
-  // 0010.1010 mono4
+  // 0010.1010 mono4, trans
   { 0x20, "Monochrome three-point polygon, opaque" },
   { 0x22, "Monochrome three-point polygon, semi-transparent" },
   { 0x28, "Monochrome four-point polygon, opaque" },
   { 0x2A, "Monochrome four-point polygon, semi-transparent" },
 
-  // 0010.0100 tex3
-  // 0010.0101 tex3
-  // 0010.0110 tex3
-  // 0010.0111 tex3
+  // 0010.0100 tex3, blend
+  // 0010.0101 tex3, raw
+  // 0010.0110 tex3, blend,trans
+  // 0010.0111 tex3, blend,raw
   { 0x24, "Textured three-point polygon, opaque, texture-blending" },
   { 0x25, "Textured three-point polygon, opaque, raw-texture" },
   { 0x26, "Textured three-point polygon, semi-transparent, texture-blending" },
   { 0x27, "Textured three-point polygon, semi-transparent, raw-texture" },
 
-  // 0010.1100 tex4
-  // 0010.1101 tex4
-  // 0010.1110 tex4
-  // 0010.1111 tex4
+  // 0010.1100 tex4, blend
+  // 0010.1101 tex4, raw
+  // 0010.1110 tex4, blend,trans
+  // 0010.1111 tex4, blend,raw
   { 0x2C, "Textured four-point polygon, opaque, texture-blending" },
   { 0x2D, "Textured four-point polygon, opaque, raw-texture" },
   { 0x2E, "Textured four-point polygon, semi-transparent, texture-blending" },
@@ -988,6 +986,16 @@ struct kv gp0[] = {
   { 0x58, "Shaded Poly-line, opaque" },
   { 0x5A, "Shaded Poly-line, semi-transparent" },
 
+  // 0110.0000 nxm
+  // 0110.0010 nxm trans
+  // 0110.1000 1x1
+  // 0110.1010 1x1 trans
+  // 0111.0000 8x8
+  // 0111.0010 8x8 trans
+  // 0111.1000 16x16
+  // 0111.1010 16x16 trans
+  // 0110.0100 tex, nxm, blend
+  // 0110.0101 tex, nxm, raw
   { 0x60, "Monochrome Rectangle (variable size) (opaque)" },
   { 0x62, "Monochrome Rectangle (variable size) (semi-transparent)" },
   { 0x68, "Monochrome Rectangle (1x1) (Dot) (opaque)" },
@@ -1046,7 +1054,7 @@ struct kv gp1[] = {
  * --------.----yyyy.yyyyyyxx.xxxxxxxx 10-bit
  */
 struct Point {
-  uint16_t x, y;
+  int x, y;
   static Point shift(uint32_t xy, int shift) {
     const uint32_t mask = (1L << shift) - 1;
     return Point (xy & mask, (xy >> shift) & mask);
@@ -1060,16 +1068,10 @@ struct Point {
     y = _y;
   };
   Point operator+(const Point& rhs) const {
-    Point p;
-    p.x = x + rhs.x;
-    p.y = y + rhs.y;
-    return p;
+    return Point(x + rhs.x, y + rhs.y);
   };
   Point operator-(const Point& rhs) const {
-    Point p;
-    p.x = x - rhs.x;
-    p.y = y - rhs.y;
-    return p;
+    return Point(x - rhs.x, y - rhs.y);
   };
   // cross product.... used for EDGE
   float cross(const Point& rhs) const {
@@ -1099,20 +1101,29 @@ struct Color {
     g = (bgr >> 8) & 0xFF;
     b = (bgr >> 16) & 0xFF;
   };
+  Color(int _r, int _g, int _b, int clamp=false) {
+    if (clamp) {
+      _r = std::clamp(_r, 0, 255);
+      _g = std::clamp(_g, 0, 255);
+      _b = std::clamp(_b, 0, 255);
+    }
+    r = _r;
+    g = _g;
+    b = _b;
+  };
   color getcolor() {
     return ((r << 16) | (g << 8) | b);
   };
+  Color operator*(float v) const {
+    return Color(r * v, g * v, b * v);
+  };
+  Color operator+(const Color& rhs) const {
+    return Color(r + rhs.r, g + rhs.g, b + rhs.b, true);
+  };
+  Color operator-(const Color& rhs) const {
+    return Color(r - rhs.r, g - rhs.g, b - rhs.b, true);
+  };
 };
-
-void setColor(const Color& c)
-{
-  glColor3ub(c.r, c.g, c.b);
-}
-
-void setColor(const uint32_t bgr)
-{
-  setColor(Color(bgr));
-}
 
 /* Rasterize triangle
  * sort by y coords:
@@ -1177,18 +1188,19 @@ struct gpu_t {
   Rect     bltRect, bltXY;
   uint32_t ret_data;
 
-  Color mergeclr(Color &c, int x, int y, int mode) {
+  // Calculate pixel transparency
+  Color transparent(Color nc, int x, int y, int mode) {
     uint32_t old = vram_getpix(x, y);
-    Color nc = c;
-    int r = (old >> 16) & 0xff;
-    int g = (old >> 8) & 0xff;
-    int b = (old >> 0) & 0xff;
+    Color nr(old >> 16, old >> 8, old >> 0);
     switch(mode) {
     case 0x0:
-      nc.r = (c.r * 0.5) + (r * 0.5);
-      nc.g = (c.g * 0.5) + (g * 0.5);
-      nc.b = (c.b * 0.5) + (b * 0.5);
-      break;
+      return (nc * 0.5) + (nr * 0.5);
+    case 0x1:
+      return nc + nr;
+    case 0x2:
+      return nc - nr;
+    case 0x3:
+      return nc + (nr * 0.25);
     }
     return nc;
   }
@@ -1218,40 +1230,38 @@ struct gpu_t {
       }
     }
   };
-  void filltri(int P0,int P1,int P2,int C0,int C1,int C2) {
-    Point p0(cmd_data[P0]);
-    Point p1(cmd_data[P1]);
-    Point p2(cmd_data[P2]);
-    Color c0(cmd_data[C0]);
-    Color c1(cmd_data[C1]);
-    Color c2(cmd_data[C2]);
+  void filltri(int pi[3], int ci[3], int ti[3]) {
+    Point v[3], p;
+    Color c[3];
 
-    printf("filltri.. : %d %d/%d %d/%d %d\n", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
-    auto edges = [](const Point& p0, const Point& p1, const Point& p2) {
-      return (float)(p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+    for (int i = 0; i < 3; i++) {
+      v[i] = Point(cmd_data[pi[i]]);
+      c[i] = Color(cmd_data[ci[i]]);
+    }
+
+    printf("filltri.. : %d %d/%d %d/%d %d\n", v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y);
+    auto edge = [](const Point& p0, const Point& p1, const Point& p2) {
+      const Point a = p1 - p0;
+      const Point b = p2 - p0;
+      return a.cross(b);
     };
-    int min_x = std::min({p0.x, p1.x, p2.x});
-    int min_y = std::min({p0.y, p1.y, p2.y});
-    int max_x = std::max({p0.x, p1.x, p2.x});
-    int max_y = std::max({p0.y, p1.y, p2.y});
+    int min_x = std::min({v[0].x, v[1].x, v[2].x});
+    int min_y = std::min({v[0].y, v[1].y, v[2].y});
+    int max_x = std::max({v[0].x, v[1].x, v[2].x});
+    int max_y = std::max({v[0].y, v[1].y, v[2].y});
 
-    Point p;
-    float area = edges(p0, p1, p2);
+    float area = edge(v[0], v[1], v[2]);
     for (p.y = min_y; p.y <= max_y; p.y++) {
       for (p.x = min_x; p.x <= max_x; p.x++) {
-	float w0 = edges(p1, p2, p) / area;
-	float w1 = edges(p2, p0, p) / area;
-	float w2 = edges(p0, p1, p) / area;
+	float w0 = edge(v[1], v[2], p) / area;
+	float w1 = edge(v[2], v[0], p) / area;
+	float w2 = edge(v[0], v[1], p) / area;
 	if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-	  Color crgb;
-	  
-	  crgb.r = (int)(c0.r * w0 + c1.r * w1 + c2.r * w2);
-	  crgb.g = (int)(c0.g * w0 + c1.g * w1 + c2.g * w2);
-	  crgb.b = (int)(c0.b * w0 + c1.b * w1 + c2.b * w2);
-	  if (cmd & 0x2) {
-	    crgb = mergeclr(crgb, p.x, p.y, 0);
+	  Color nc = (c[0] * w0) + (c[1] * w1) + (c[2] * w2);
+	  if (cmd & ATTR_TRANSP) {
+	    nc = transparent(nc, p.x, p.y, 0);
 	  }
-	  vram_setpix(p.x, p.y, crgb.getcolor());
+	  vram_setpix(p.x, p.y, nc.getcolor());
 	}
       }
     }
@@ -1282,35 +1292,34 @@ struct gpu_t {
   color vram_getpix(int x, int y, bool clip=true) {
     return vram[(y * 1024) + x];
   };
-  double mym;
-  double my;
   void drawline(int x1, int x2, int y, Color c) {
     color cx = c.getcolor();
     while(x1 < x2) {
       Color cx = c;
       if (cmd & 0x2) {
-	cx = mergeclr(c, x1, y, 0);
+	cx = transparent(c, x1, y, 0);
       }
       vram_setpix(x1++, y, cx.getcolor());
     }
   };
 
-  /* Make vertex */
-  void mkvtx(const Point &p, uint32_t clr, uint32_t tex = -1) {
-    Color c(clr);
-    float px = (p.x * 2.0 / xres) - 1.0;
-    float py = ((yres - p.y) * 2.0 / yres) - 1.0;
-    printf(" vertex: %f %f [%d,%d] : %.8x %.8x\n", px, py, p.x, p.y, c.getcolor(), tex);
-    glColor3ub(c.r, c.g, c.b);
-    glVertex2f(px, py);
-  };
-  
-  void mkvtx(uint32_t v, uint32_t clr, uint32_t tex = -1) {
-    mkvtx(Point(v), clr, tex);
-  };
-  
   /* Gets GP0 command length */
   int get_cmdlen(int cmd) {
+    //0010.0000 = 4
+    //0010.0010 = 4
+    //0010.1000 = 5 quad
+    //0010.1010 = 5 quad
+    //0010.01xx = 7 texture
+    //0010.11xx = 9 quad
+    //0011.0000 = 6 shaded
+    //0011.0010 = 6 shaded
+    //0011.1000 = 8
+    //0011.1001 = 8
+    //0011.1010 = 8
+    //0011.0100 = 9
+    //0011.0110 = 9
+    //0011.1100 = 12 quad
+    //0011.1110 = 12 quad
     switch (cmd) {
     case 0x00: return (0);
     case 0x01: return (0);
@@ -1358,26 +1367,15 @@ struct gpu_t {
     /* Polylines keep using same data */
   };
   void drawLine() {
-    glBegin(GL_LINE_STRIP);
-    mkvtx(cmd_data[1], cmd_data[0]);
     switch (cmd) {
     case 0x40: case 0x42:
-      mkvtx(cmd_data[2], cmd_data[0]);
       break;
     case 0x48: case 0x4a:
-      for (int i = 1; i < cmd_pos; i++) {
-	mkvtx(cmd_data[i], cmd_data[0]);
-      }
       break;
     case 0x50: case 0x52:
     case 0x58: case 0x5a:
-      for (int i = 1; i < cmd_pos; i+=2) {
-	mkvtx(cmd_data[i], cmd_data[i-1]);
-      }
       break;
     }
-    glEnd();
-    glFlush();
   };
   void drawRect() {
     int cp = 0, ci = 0;
@@ -1412,20 +1410,31 @@ struct gpu_t {
     fillrect(p[0], p[2], Color(cmd_data[0]));
   };
   void drawTriangle() {
+    int pi[] = { 1,2,3 };
+    int ci[] = { 0,0,0 };
+    int ti[] = {-1,-1,-1};
+
+    // 24 0010.0100 is the solid
+    // 26 0010.0110 is the transparent
+    // 34 0011.0100 is gradient
+    // 36 0011.0110 is gradient transparent
     switch (cmd_len) {
     case 4: // color,v1,v2,v3 mono
-      filltri(1,2,3,0,0,0);
       break;
     case 7: // color,v1,t1,v2,t2,v3,t3 textured
-      filltri(1,3,5,0,0,0);
+      pi[1] = 3;
+      pi[2] = 5;
       break;
     case 6: // c1,v1,c2,v2,c3,v3 shaded
-      filltri(1,3,5,0,2,4);
+      pi[1] = 3; ci[1] = 2;
+      pi[2] = 5; ci[2] = 4;
       break;
     case 9: // c1,v1,t1,c2,v2,t2,c3,v3,t3 shaded textured
-      filltri(1,4,7,0,3,6);
+      pi[1] = 4; ci[1] = 3;
+      pi[2] = 7; ci[2] = 6;
       break;
     }
+    filltri(pi,ci,ti);
   }
   void drawQuad() {
     int ti[] = { -1, -1, -1, -1 };
@@ -1453,8 +1462,8 @@ struct gpu_t {
       ci[3] = 9; pi[3] = 10;  ti[3] = 11;
       break;
     }
-    filltri(pi[0],pi[1],pi[2],ci[0],ci[1],ci[2]);
-    filltri(pi[1],pi[2],pi[3],ci[1],ci[2],ci[3]);
+    filltri(pi+0,ci+0,ti+0);
+    filltri(pi+1,ci+1,ti+1);
   }
   void reset() {
     vmode  = 0;
@@ -1543,14 +1552,10 @@ struct gpu_t {
       break;
     case 0xE3: // set Drawing Area Upper Left
       clip_ul = Point::shift(data, 10);
-      //glViewport(dul.x, dul.y, dlr.x, dlr.y);
-      //glOrtho(0, xres, yres, 0, 0, 1);
       break;
     case 0xE4: // set Drawing Area Lower Right
       clip_lr = Point::shift(data, 10);
-      //glViewport(dul.x, dul.y, dlr.x, dlr.y);
-      //glOrtho(0, xres, yres, 0, 0, 1);
-     break;
+      break;
     case 0xa0 ... 0xbf: // copy to vram
       setblt(Rect(cmd_data[1], cmd_data[2]));
       cmd = GP0_COPY;
@@ -1575,8 +1580,6 @@ struct gpu_t {
     case 0x00: // gpu reset (14802000)
       reset();
       printf("pre\n");
-      glMatrixMode(GL_PROJECTION);
-      glLoadIdentity();
       printf("post\n");
       break;
     case 0x01: // reset command buffer;
@@ -1638,13 +1641,6 @@ struct edge_t {
   int flag;
 };
 
-static void swap(int *a, int *b)
-{
-  int tmp = *a;
-  *a = *b;
-  *b = tmp;
-}
-
 int edgecmp(const void *a, const void *b)
 {
   const edge_t *ea = (edge_t *)a;
@@ -1663,7 +1659,6 @@ void gpu_t::polyfill(int nvertex, Point *xy, Color c)
   edge_t *global;
   int ng = 0, x0, y0, x1, y1;
 
-  my = 0;
   global = (edge_t *)alloca(sizeof(edge_t) * nvertex);
   for (int n = 0; n < nvertex; n++) {
     x0 = xy[n].x;
@@ -1672,21 +1667,20 @@ void gpu_t::polyfill(int nvertex, Point *xy, Color c)
     y1 = xy[(n+1) % nvertex].y;
     if (y0 > y1) {
       // increasing y
-      swap(&y0, &y1);
-      swap(&x0, &x1);
+      std::swap(y0, y1);
+      std::swap(x0, x1);
     }
+    // skip horizontal lines
     if (y0 != y1) {
-      // skip horizontal lines
       global[ng].x0 = x0;
       global[ng].y0 = y0;
       global[ng].y1 = y1;
       global[ng].flag = 0;
+      // calculate slope
       global[ng].m = ((double)(x1-x0)) / (y1-y0);
       ng++;
     }
   }
-  printf("haz: %d\n", ng);
-#if 1
   while (ng) {
     qsort(global, ng, sizeof(edge_t), edgecmp);
     if (global[0].flag) {
@@ -1707,10 +1701,8 @@ void gpu_t::polyfill(int nvertex, Point *xy, Color c)
       }
     }
   }
-  printf("done\n");
-#endif
 }
-
+  
 gpu_t gpu;
 
 uint32_t kp = 0;
@@ -1725,22 +1717,22 @@ void setkeystate(int vk, int mask)
 }
 
 /*
-JOY_L2     equ 0x0001 ; Joypad Input: L2       (Bit 0)
-JOY_R2     equ 0x0002 ; Joypad Input: R2       (Bit 1)
-JOY_L1     equ 0x0004 ; Joypad Input: L1       (Bit 2)
-JOY_R1     equ 0x0008 ; Joypad Input: R1       (Bit 3)
-JOY_T      equ 0x0010 ; Joypad Input: Triangle (Bit 4)
-JOY_C      equ 0x0020 ; Joypad Input: Circle   (Bit 5)
-JOY_X      equ 0x0040 ; Joypad Input: X        (Bit 6)
-JOY_S      equ 0x0080 ; Joypad Input: Square   (Bit 7)
-JOY_SELECT equ 0x0100 ; Joypad Input: Select   (Bit 8)
-JOY_L3     equ 0x0200 ; Joypad Input: L3       (Bit 9)  (Analog Mode Only)
-JOY_R3     equ 0x0400 ; Joypad Input: R3       (Bit 10) (Analog Mode Only)
-JOY_START  equ 0x0800 ; Joypad Input: Start    (Bit 11)
-JOY_UP     equ 0x1000 ; Joypad Input: Up       (Bit 12)
-JOY_RIGHT  equ 0x2000 ; Joypad Input: Right    (Bit 13)
-JOY_DOWN   equ 0x4000 ; Joypad Input: Down     (Bit 14)
-JOY_LEFT   equ 0x8000 ; Joypad Input: Left     (Bit 15)
+  JOY_L2     equ 0x0001 ; Joypad Input: L2       (Bit 0)
+  JOY_R2     equ 0x0002 ; Joypad Input: R2       (Bit 1)
+  JOY_L1     equ 0x0004 ; Joypad Input: L1       (Bit 2)
+  JOY_R1     equ 0x0008 ; Joypad Input: R1       (Bit 3)
+  JOY_T      equ 0x0010 ; Joypad Input: Triangle (Bit 4)
+  JOY_C      equ 0x0020 ; Joypad Input: Circle   (Bit 5)
+  JOY_X      equ 0x0040 ; Joypad Input: X        (Bit 6)
+  JOY_S      equ 0x0080 ; Joypad Input: Square   (Bit 7)
+  JOY_SELECT equ 0x0100 ; Joypad Input: Select   (Bit 8)
+  JOY_L3     equ 0x0200 ; Joypad Input: L3       (Bit 9)  (Analog Mode Only)
+  JOY_R3     equ 0x0400 ; Joypad Input: R3       (Bit 10) (Analog Mode Only)
+  JOY_START  equ 0x0800 ; Joypad Input: Start    (Bit 11)
+  JOY_UP     equ 0x1000 ; Joypad Input: Up       (Bit 12)
+  JOY_RIGHT  equ 0x2000 ; Joypad Input: Right    (Bit 13)
+  JOY_DOWN   equ 0x4000 ; Joypad Input: Down     (Bit 14)
+  JOY_LEFT   equ 0x8000 ; Joypad Input: Left     (Bit 15)
 */
 
 enum {
