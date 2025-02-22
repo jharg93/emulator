@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <assert.h>
 #include "dstk.h"
-
 #define HAVE_CPU16
 #define HAVE_CPU32
 #include "cpu.h"
@@ -282,7 +281,7 @@ void loadsyms()
 }
 
 /* Gernerate Coverage Map */
-void dumpcfg(uint8_t *buf, size_t sz, int pos, int base)
+void dumpcfg(mips_cpu *c, uint8_t *buf, size_t sz, int pos, int base)
 {
   dstk stk(sz, printf);
   uint32_t op, opcode, func;
@@ -304,7 +303,7 @@ void dumpcfg(uint8_t *buf, size_t sz, int pos, int base)
       func = (op & 0x3F);
       opcode = (op >> 26) & 0x3F;
       printf("@@ %.8x: op=%.8x [%.2x,%.2x] ", pos, op, opcode, func);
-      disasm(pos+base, op);
+      disasm(c, pos+base, op);
       
       if (opcode == 0x00 && (func == 0x0d || func == 0x08 || func == 0x09 || func == 0x0c)) {
 	nxt[0] = -1;
@@ -437,7 +436,7 @@ int gtecmd(gte_t *g, int cmd)
  *   r2,r3 = VXY1, VZ1
  *   r4,r5 = VXY2, VZ2
  */
-void mips_copr(uint32_t op, int id)
+void mips_copr(mips_cpu *c, uint32_t op, int id)
 {
   int cop = (op >> 26) & 3;
   int reg = (op >> 11) & 0x1F;
@@ -803,14 +802,17 @@ struct kv bioscalls[] = {
   { -1 },
 }; 
 
-void bios_call()
+void bios_call(mips_cpu *c)
 {
   int cmd;
   char str[128];
+  uint32_t *regs = c->regs;
+  uint32_t *jmpslot = c->jmpslot;
   const char *sfx;
   
-  cmd = (jmpslot[0] * 0x100) + regs[9];
-  printf("Bios Call %.2x%.2x(%.8x,%.8x,%.8x,%.8x): ", jmpslot[0], regs[9], regs[4], regs[5], regs[6], regs[7]);
+  cmd = (c->jmpslot[0] * 0x100) + c->regs[9];
+  printf("Bios Call %.2x%.2x(%.8x,%.8x,%.8x,%.8x): ",
+	 jmpslot[0], regs[9], regs[4], regs[5], regs[6], regs[7]);
   switch (cmd) {
   case 0xa03f:
     // printf
@@ -842,11 +844,14 @@ void bios_call()
   printf(": zzz\n");
 }
 
-extern void _cpu_step();
+extern void _cpu_step(mips_cpu *c);
 
 /* 2 cycles per instruction, 16.9 million per sec , ~281666 cycles per frame */
-int cpu_step()
+int cpu_step(mips_cpu *c)
 {
+  uint32_t *regs = c->regs;
+  uint32_t *jmpslot = c->jmpslot;
+  
   static uint32_t ctr;
 
   if ((++ctr % 28000) == 0 && screen) {
@@ -863,26 +868,27 @@ int cpu_step()
     if (jmpslot[0] == 0xA0 || jmpslot[0] == 0xB0 || jmpslot[0] == 0xc0) {
       hexdump(&ram[0x00], 256);
       // BIOS Call
-      bios_call();
+      bios_call(c);
     }
-    PC = jmpslot[0];
+    c->PC = jmpslot[0];
   }
   jmpslot[0] = jmpslot[1];
   jmpslot[1] = 0xFFFFFFFF;
 
-  _cpu_step();
+  _cpu_step(c);
   return 0;
 }
+mips_cpu c;
 
 void cpu_reset(uint32_t addr) {
   memset(copr, 0, sizeof(copr));
-  memset(regs, 0, sizeof(regs));
+  memset(c.regs, 0, sizeof(c.regs));
 
   copr[0][12] = 0x10900000;
   copr[0][15] = 0x2;
   
-  jmpslot[0] = addr;
-  jmpslot[1] = 0xFFFFFFFF;
+  c.jmpslot[0] = addr;
+  c.jmpslot[1] = 0xFFFFFFFF;
 }
 
 int psxio(void *arg, uint32_t addr, int mode, iodata_t& data)
@@ -931,21 +937,37 @@ enum {
 
 /* GP0 commands */
 struct kv gp0[] = {
+  // 0010.0000 mono3
+  // 0010.0010 mono3
+  // 0010.1000 mono4
+  // 0010.1010 mono4
   { 0x20, "Monochrome three-point polygon, opaque" },
   { 0x22, "Monochrome three-point polygon, semi-transparent" },
   { 0x28, "Monochrome four-point polygon, opaque" },
   { 0x2A, "Monochrome four-point polygon, semi-transparent" },
 
+  // 0010.0100 tex3
+  // 0010.0101 tex3
+  // 0010.0110 tex3
+  // 0010.0111 tex3
   { 0x24, "Textured three-point polygon, opaque, texture-blending" },
   { 0x25, "Textured three-point polygon, opaque, raw-texture" },
   { 0x26, "Textured three-point polygon, semi-transparent, texture-blending" },
   { 0x27, "Textured three-point polygon, semi-transparent, raw-texture" },
 
+  // 0010.1100 tex4
+  // 0010.1101 tex4
+  // 0010.1110 tex4
+  // 0010.1111 tex4
   { 0x2C, "Textured four-point polygon, opaque, texture-blending" },
   { 0x2D, "Textured four-point polygon, opaque, raw-texture" },
   { 0x2E, "Textured four-point polygon, semi-transparent, texture-blending" },
   { 0x2F, "Textured four-point polygon, semi-transparent, raw-texture" },
 
+  // 0011.0000 shade3
+  // 0011.0010 shade3
+  // 0011.1000 shade4
+  // 0011.1010 shade4
   { 0x30, "Shaded three-point polygon, opaque" },
   { 0x32, "Shaded three-point polygon, semi-transparent" },
   { 0x38, "Shaded four-point polygon, opaque" },
@@ -1042,7 +1064,11 @@ struct Point {
     p.x = x + rhs.x;
     p.y = y + rhs.y;
     return p;
-  }
+  };
+  // cross product.... used for EDGE
+  auto cross(const Point& rhs) const {
+    return (x * rhs.y) - (y * rhs.x);
+  };
 };
 
 struct Rect {
@@ -1063,9 +1089,9 @@ struct Rect {
 struct Color {
   uint8_t r, g, b;
   Color(uint32_t bgr = 0) {
-    b = (bgr >> 16) & 0xFF;
-    g = (bgr >> 8) & 0xFF;
     r = (bgr >> 0) & 0xFF;
+    g = (bgr >> 8) & 0xFF;
+    b = (bgr >> 16) & 0xFF;
   };
   color getcolor() {
     return ((r << 16) | (g << 8) | b);
@@ -1134,15 +1160,15 @@ struct gpu_t {
   bool rfd    = true;  // D28 ready for dma
   bool odd    = false; // D31
 
-  /* Upper Left/Lower Right display area */
-  Point dul, dlr;
+  /* Upper Left/Lower Right clipping area */
+  Point clip_ul, clip_lr;
 
   /* Command buffer */
   uint32_t cmd = GP0_NONE;
   uint32_t cmd_pos;
   uint32_t cmd_len;
   uint32_t cmd_data[16];
-  Rect      bltRect, bltXY;
+  Rect     bltRect, bltXY;
   uint32_t ret_data;
 
   void copyvram(Rect src, Point dest) {
@@ -1167,6 +1193,12 @@ struct gpu_t {
       }
     }
   };
+  void draw_gradient(Point& v0, Point& v1, Point& v2,
+		     Color& c0, Color& c1, Color& c2,
+		     int tx0, tx1, tx2, int mode)
+  {
+    
+  }
   void setblt(Rect r) {
     bltRect = r;
     bltXY.x = 0;
@@ -1185,10 +1217,22 @@ struct gpu_t {
     return 1;
   }
   void polyfill(int n, Point *xy, Color c);
-  void vram_setpix(int x, int y, color c) {
+
+  // read/write pixel taking into account clipping
+  void vram_setpix(int x, int y, color c, bool clip=true) {
+    if (clip) {
+      if (x < clip_ul.x || x > clip_lr.x ||
+	  y < clip_lr.y || y > clip_lr.y)) {
+      return;
+    }
     vram[(y * 1024) + x] = c;
   }
-  color vram_getpix(int x, int y) {
+  color vram_getpix(int x, int y, bool clip=true) {
+    if (clip) {
+      if (x < clip_ul.x || x > clip_lr.x ||
+	  y < clip_lr.y || y > clip_lr.y)) {
+      return 0;
+    }
     return vram[(y * 1024) + x];
   };
   double mym;
@@ -1291,6 +1335,8 @@ struct gpu_t {
     p[0] = Point(cmd_data[1]);
     switch (cmd) {
     case 0x60: case 0x62:
+      //monochrome rectangle, opaque
+      //monochrome, semi transparent
       p[2] = p[0] + Point(cmd_data[2]);
       break;
     case 0x64 ... 0x67:
@@ -1316,14 +1362,16 @@ struct gpu_t {
     p[1].y = p[0].y;
     p[3].x = p[0].x;
     p[3].y = p[2].y;
+#if 0
     glBegin(GL_POLYGON);
     for (int i = 0; i < 4; i++) {
       mkvtx(p[i], cmd_data[cp]);
       cp += ci;
     }
-    fillrect(p[0], p[2], Color(cmd_data[0]));
     glEnd();
     glFlush();
+#endif
+    fillrect(p[0], p[2], Color(cmd_data[0]));
   };
   void drawTriangle() {
     int pi[] = { 1, 2, 3 };
@@ -1344,12 +1392,14 @@ struct gpu_t {
       ci[1] = 3; ci[2] = 6;
       break;
     }
+#if 0
     glBegin(GL_TRIANGLES);
     for (int i = 0; i < 3; i++) {
       mkvtx(cmd_data[pi[i]], cmd_data[ci[i]]);
     }
     glEnd();
     glFlush();
+#endif
   }
   void drawQuad() {
     int ti[] = { -1, -1, -1, -1 };
@@ -1380,6 +1430,7 @@ struct gpu_t {
     for (int i = 0; i < 4; i++) {
       printf("p:%d c:%d t:%d\n", pi[i], ci[i], ti[i]);
     }
+#if 0
     glBegin(GL_QUADS);
     Point p[4];
     for (int i = 0; i < 4; i++) {
@@ -1390,9 +1441,10 @@ struct gpu_t {
       p[i] = cmd_data[pi[i]];
       mkvtx(cmd_data[pi[i]], cmd_data[ci[i]], tex);
     }
-    polyfill(4, p, Color(cmd_data[ci[0]]));
     glEnd();
     glFlush();
+#endif
+    polyfill(4, p, Color(cmd_data[ci[0]]));
   }
   void reset() {
     vmode  = 0;
@@ -1435,13 +1487,15 @@ struct gpu_t {
     }
     printf("   GPU_DATA(%.8x) pos:%.8x/%.4x\n", data, cmd_pos, cmd_len);
 
-    /* Add data to vector */
+    /* Add data to vector, return if we don't yet have enough */
     cmd_data[cmd_pos++] = data;
     if ((cmd_len & VARLEN) && (data == 0x55555555)) {
+      printf("varlen data...\n");
       cmd_pos--;
     }
-    else if (cmd_pos < cmd_len)
+    else if (cmd_pos < cmd_len) {
       return;
+    }
     switch (cmd) {
     case 0x20: case 0x22: // 4 mono
     case 0x24 ... 0x27:   // 7 textured
@@ -1450,7 +1504,7 @@ struct gpu_t {
       drawTriangle();
       break;
     case 0x28: case 0x2a:
-    case 0x2c ... 0x2f:
+    case 0x2c ... 0x2f:  
     case 0x38: case 0x3a:
     case 0x3c: case 0x3e:
       drawQuad();
@@ -1470,12 +1524,12 @@ struct gpu_t {
       dither = (data >> 9) & 1;
       break;
     case 0xE3: // set Drawing Area Upper Left
-      dul = Point::shift(data, 10);
+      clip_ul = Point::shift(data, 10);
       //glViewport(dul.x, dul.y, dlr.x, dlr.y);
       //glOrtho(0, xres, yres, 0, 0, 1);
       break;
     case 0xE4: // set Drawing Area Lower Right
-      dlr = Point::shift(data, 10);
+      clip_lr = Point::shift(data, 10);
       //glViewport(dul.x, dul.y, dlr.x, dlr.y);
       //glOrtho(0, xres, yres, 0, 0, 1);
      break;
@@ -1845,15 +1899,20 @@ int main(int argc, char *argv[])
   uint8_t *cart;
   psxheader_t *hdr;
   size_t sz;
-  
+
   loadsyms();
   psxlogfd = open("psx.log", O_CREAT|O_TRUNC|O_WRONLY, 0660);
   
-  /* read header */
+  /* load BIOS */
+  rom = loadrom("SCPH1001.BIN", sz);
+  assert(rom && sz == ROM_SIZE);
+
+  /* read ROM */
   setbuf(stdout, NULL);
   cart = loadrom(argv[1], sz);
   hdr = (psxheader_t *)cart;
 
+  // verify that data looks sane
   assert(sz >= 0x800 + hdr->text_size);
   assert(hdr->ip >= hdr->text_addr && hdr->ip < (hdr->text_addr + hdr->text_size));
   printf("size:  %.8zx\n", sz);
@@ -1861,23 +1920,27 @@ int main(int argc, char *argv[])
   ram = new uint8_t[RAM_SIZE]{0};
   scr = new uint8_t[SCR_SIZE]{0};
 
-  /* load BIOS */
-  rom = loadrom("SCPH1001.BIN", sz);
-  assert(rom && sz == ROM_SIZE);
-
-#if 0
   if (argc > 2) {
-    dumpcfg(rom, sz, 0x0, hdr->text_addr);
+    dumpcfg(&c, rom, sz, 0x0, hdr->text_addr);
     exit(0);
   }
-#endif
-  
   mmu.init(MMUMASK);
+  /* Memory map
+   * exp1 1f000000 1f080000
+   * mc1  1f801000 1f801023
+   * mc2  1f801060 1F801063
+   * gpu  1f801810 1f801814
+   * mdec 1f801820 1f801827
+   * ic   1f801070 1F801077
+   * exp2 1f802000 1f9fffff
+   * bios 1fc00000 1fc7ffff
+   */
   mmu.register_handler(RAM_START, RAM_END, 0x7FFFFF, psxram, ram,  _RW, "RAM");
   mmu.register_handler(SCR_START, SCR_END, 0x3FF,    psxscr, scr,  _RW, "SCRATCH");
   mmu.register_handler(IO_START,  IO_END,  0x3FFF,   psxreg, ioreg,_RW, "I/O");
-  mmu.register_handler(ROM_START, ROM_END, 0x7FFFF,  psxrom, rom,  _RD, "ROM");
+  mmu.register_handler(ROM_START, ROM_END, 0x7FFFF,  psxrom, rom,  _RD, "bios.ROM");
 
+  // print header
 #define cp(x) printf("%-12s : %.8x [%12u]\n", #x, hdr->x, hdr->x);
   cp(text);
   cp(data);
@@ -1899,10 +1962,11 @@ int main(int argc, char *argv[])
   printf("%.8x %x\n", hdr->text_addr % RAM_SIZE, get32(ram + (hdr->ip % RAM_SIZE)));
 
   cpu_reset(0xBFC00000); // hdr.ip & (RAM_SIZE-1));
+  //cpu_reset(hdr->ip & (RAM_SIZE-1));
 
   /* Run until 'LoadShell' */
-  while (jmpslot[0] != 0x80030000) {
-    cpu_step();
+  while (c.jmpslot[0] != 0x80030000) {
+    cpu_step(&c);
   }
   printf("================================== Completed bootstrap!!!\n\n");
   printf("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ Start ROM: '%s'\n", argv[1]);
@@ -1911,12 +1975,12 @@ int main(int argc, char *argv[])
   memcpy(&ram[hdr->text_addr & (RAM_SIZE-1)], &cart[0x800], hdr->text_size);
 
   if (argc > 2) {
-    dumpcfg(&cart[0x800], hdr->text_size, 0x0, 0x0);
+    dumpcfg(&c, &cart[0x800], hdr->text_size, 0x0, 0x0);
     exit(0);
   }
-  jmpslot[0] = (hdr->ip % RAM_SIZE);
+  c.jmpslot[0] = (hdr->ip % RAM_SIZE);
   //jmpslot[0] = 0xc00460;
   for(;;)  {
-    cpu_step();
+    cpu_step(&c);
   }
 }

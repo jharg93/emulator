@@ -33,7 +33,6 @@
 
 extern const char *fnname(uint32_t addr);
 extern void mips_syscall(uint32_t call);
-extern void mips_copr(uint32_t op, int id);
 
 /*==================================
  * CPU Registers
@@ -48,6 +47,20 @@ extern void mips_copr(uint32_t op, int id);
 // sp=R29
 // fp=R30
 // ra=R31
+uint32_t copr[4][64];
+struct mips_cpu {
+  uint32_t regs[35];
+
+  uint32_t& sp=regs[29];
+  uint32_t& PC=regs[34];
+  uint32_t& ra=regs[31];
+  uint32_t& rlo=regs[32];
+  uint32_t& rhi=regs[33];
+
+  uint32_t jmpslot[2];
+};
+extern void mips_copr(mips_cpu *c, uint32_t op, int id);
+#if 0
 static uint32_t  regs[35];
 static uint32_t  copr[4][64];
 
@@ -58,6 +71,7 @@ static uint32_t& rhi=regs[33];
 static uint32_t& PC=regs[34];
 
 static uint32_t jmpslot[2];
+#endif
 
 static const char *regname[] = {
   "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
@@ -79,9 +93,9 @@ static const char *regname[] = {
 #define rd   ((op >> 11) & 0x1F)
 
 /* Unsigned values */
-#define Rs   regs[rs]
-#define Rt   regs[rt]
-#define Rd   regs[rd]
+#define Rs   c->regs[rs]
+#define Rt   c->regs[rt]
+#define Rd   c->regs[rd]
 #define CRt  copr[(op >> 26) & 3][rt]
 
 /* Signed values */
@@ -92,21 +106,21 @@ static const char *regname[] = {
 #define i5  ((op >> 6) & 0x1F)
 #define i16 (op & 0xFFFF)
 #define s16 signex(op, 16)
-#define j26 _j26(op)
-#define j16 _j16(op)
+#define j26 _j26(c, op)
+#define j16 _j16(c, op)
 
 int trace, SPC;
 
-static uint32_t _j26(uint32_t op)
+static uint32_t _j26(mips_cpu *c, uint32_t op)
 {
   op = (op & 0x03FFFFFF);
-  return (op * 4) + (PC & 0xF0000000);
+  return (op * 4) + (c->PC & 0xF0000000);
 }
 
-static uint32_t _j16(uint32_t op)
+static uint32_t _j16(mips_cpu *c, uint32_t op)
 {
   op = s16;
-  return (op * 4) + PC;
+  return (op * 4) + c->PC;
 }
 
 /* Opcode formats:
@@ -136,53 +150,53 @@ static const int opfn(uint32_t op) {
 /*==================================================================*
  * Opcode Handlers
  *==================================================================*/
-static void mips_set(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_set(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = src1;
 }
-static void mips_add(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_add(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = src1 + src2;
 }
-static void mips_addu(uint32_t &d, uint32_t src1, uint32_t src2) {
+static void mips_addu(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2) {
   d = src1 + src2;
 }
-static void mips_sub(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_sub(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = src1 - src2;
 }
-static void mips_subu(uint32_t &d, uint32_t src1, uint32_t src2) {
+static void mips_subu(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2) {
   d = src1 - src2;
 }
-static void mips_and(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_and(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = src1 & src2;
 }
-static void mips_or(uint32_t &d, uint32_t src1, uint32_t src2)   {
+static void mips_or(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)   {
   d = src1 | src2;
 }
-static void mips_xor(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_xor(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = src1 ^ src2;
 }
-static void mips_nor(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_nor(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = ~(src1 | src2);
 }
 
 /* Load/Store */
-static void mips_lw(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
+static void mips_lw(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   d = cpu_read32(src1+src2);
 }
-static void mips_lhu(uint32_t &d, uint32_t src1, uint32_t src2=0) {
+static void mips_lhu(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0) {
   d = cpu_read16(src1+src2);
 }
-static void mips_lbu(uint32_t &d, uint32_t src1, uint32_t src2=0) {
+static void mips_lbu(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0) {
   d = cpu_read8(src1+src2);
 }
-static void mips_lh(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
+static void mips_lh(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   d = (int16_t)cpu_read16(src1+src2);
 }
-static void mips_lb(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
+static void mips_lb(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   d = (int8_t)cpu_read8(src1+src2);
 }
 
 /* Ugh, ugly */
-static void mips_lwl(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
+static void mips_lwl(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   const uint32_t shift[] = { 24, 16, 8, 0 };
   const uint32_t _mask[] = { 0xFF000000, 0xFFFF0000, 0xFFFFFF00, 0xFFFFFFFF };
   uint32_t val = 0;
@@ -199,7 +213,7 @@ static void mips_lwl(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
 }
 
 /* Ugh, ugly */
-static void mips_lwr(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
+static void mips_lwr(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   const uint32_t shift[] = { 24, 16, 8, 0 };
   uint32_t val = 0;
   uint32_t mask = 0;
@@ -214,17 +228,17 @@ static void mips_lwr(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   rmw(d, val, mask);
 }
 
-static void mips_sw(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
+static void mips_sw(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   cpu_write32(src1+src2, d);
 }
-static void mips_sh(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
+static void mips_sh(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   cpu_write16(src1+src2, d);
 }
-static void mips_sb(uint32_t &d, uint32_t src1, uint32_t src2=0)  {
+static void mips_sb(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0)  {
   cpu_write8(src1+src2, d);
 }
 
-static void mips_swl(uint32_t& d, uint32_t src1, uint32_t src2=0) {
+static void mips_swl(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0) {
   uint32_t tmp = d;
 
   src1 += src2;
@@ -234,7 +248,7 @@ static void mips_swl(uint32_t& d, uint32_t src1, uint32_t src2=0) {
   }
 }
 
-static void mips_swr(uint32_t& d, uint32_t src1, uint32_t src2=0) {
+static void mips_swr(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2=0) {
   uint32_t tmp = d;
 
   src1 += src2;
@@ -244,61 +258,61 @@ static void mips_swr(uint32_t& d, uint32_t src1, uint32_t src2=0) {
   }
 }
 
-static void mips_shl(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_shl(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = src1 << src2;
 }
-static void mips_shr(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_shr(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = src1 >> src2;
 }
-static void mips_sar(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_sar(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = (int32_t)src1 >> src2;
 }
-static void mips_slt(uint32_t &d, uint32_t src1, uint32_t src2)  {
+static void mips_slt(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2)  {
   d = !!((int32_t)src1 < (int32_t)src2);
 }
-static void mips_sltu(uint32_t &d, uint32_t src1, uint32_t src2) {
+static void mips_sltu(mips_cpu *c, uint32_t &d, uint32_t src1, uint32_t src2) {
   d = !!(src1 < src2);
 }
 
-static void mips_mult(int32_t src1, int32_t src2) {
+static void mips_mult(mips_cpu *c, int32_t src1, int32_t src2) {
   uint64_t r = (int64_t)src1 * src2;
 
-  rhi = (uint32_t)(r >> 32);
-  rlo = (uint32_t)r;
+  c->rhi = (uint32_t)(r >> 32);
+  c->rlo = (uint32_t)r;
 }
 
-static void mips_multu(uint32_t src1, uint32_t src2) {
+static void mips_multu(mips_cpu *c, uint32_t src1, uint32_t src2) {
   uint64_t r = (uint64_t)src1 * src2;
 
-  rhi = (uint32_t)(r >> 32);
-  rlo = (uint32_t)r;
+  c->rhi = (uint32_t)(r >> 32);
+  c->rlo = (uint32_t)r;
 }
 
-static void mips_div(int32_t a, int32_t b) {
-  rlo = a / b;
-  rhi = a % b;
+static void mips_div(mips_cpu *c, int32_t a, int32_t b) {
+  c->rlo = a / b;
+  c->rhi = a % b;
 }
 
-static void mips_divu(uint32_t a, uint32_t b) {
-  rlo = a / b;
-  rhi = a % b;
+static void mips_divu(mips_cpu *c, uint32_t a, uint32_t b) {
+  c->rlo = a / b;
+  c->rhi = a % b;
 }
 
 /* Set MIPS PC jump slot, optionally setting link register */
-static void mips_setpc(bool test, uint32_t npc, uint32_t *tra)
+static void mips_setpc(mips_cpu *c, bool test, uint32_t npc, uint32_t *tra)
 {
   if (test) {
     if (trace) 
       printf("---> Set JMPSLOT = %.8x\n", npc);
-    jmpslot[1] = npc;
+    c->jmpslot[1] = npc;
     if (tra) {
       /* Set link register */
-      *tra = PC + 4;
+      *tra = c->PC + 4;
     }
   }
 }
 
-typedef void (*evalfn_t)(uint32_t&, uint32_t, uint32_t);
+typedef void (*evalfn_t)(mips_cpu *c, uint32_t&, uint32_t, uint32_t);
 
 struct opcode_t {
   int flag;
@@ -319,6 +333,11 @@ enum {
   RtRsI16,
   RtI16,
   CRtRsS16,
+
+  copr0 = 0x1000,
+  copr1,
+  copr2,
+  copr3,
 };
 
 
@@ -388,10 +407,10 @@ static const opcode_t optab[] = {
   [0x10d] = mkop(mips_or,   RtRsI16,  "ori    %Rt, %Rs, %i16"),
   [0x10e] = mkop(mips_xor,  RtRsI16,  "xori   %Rt, %Rs, %i16"),
   [0x10f] = mkop(mips_shl,  RtI16,    "lui    %Rt, %i16"),
-  [0x110] = mkop(NULL,     ________,  "cop0"),
-  [0x111] = mkop(NULL,     ________,  "cop1"),
-  [0x112] = mkop(NULL,     ________,  "cop2"),
-  [0x113] = mkop(NULL,     ________,  "cop3"),
+  [0x110] = mkop(NULL,      copr0,    "cop0"),
+  [0x111] = mkop(NULL,      copr1,    "cop1"),
+  [0x112] = mkop(NULL,      copr2,    "cop2"),
+  [0x113] = mkop(NULL,      copr3,    "cop3"),
   [0x120] = mkop(mips_lb,  RtRsS16,   "lb     %Rt, %i16(%Rs)"),
   [0x121] = mkop(mips_lh,  RtRsS16,   "lh     %Rt, %i16(%Rs)"),
   [0x122] = mkop(mips_lwl, RtRsS16,   "lwl    %Rt, %i16(%Rs)"),
@@ -441,12 +460,12 @@ static const char *disstr(uint32_t op) {
   return o->mnem;
 };
 
-void disasm(uint32_t pc, uint32_t op)
+void disasm(mips_cpu *c, uint32_t pc, uint32_t op)
 {
   const char *src = disstr(op);
   char dstr[128], *dst;
 
-  PC = pc;
+  c->PC = pc;
   if (!src)
     src = "xxx";
   dst = dstr;
@@ -468,82 +487,83 @@ void disasm(uint32_t pc, uint32_t op)
 
 #define fi assert(0)
 
-void cpu_showregs()
+void cpu_showregs(mips_cpu *c)
 {
   for (int i = 0; i < 32; i++) {
-    printf("%3s:%.8x ", regname[i], regs[i]);
+    printf("%3s:%.8x ", regname[i], c->regs[i]);
     if ((i & 0xF) == 0xF)
       printf("\n");
   }
 }
 
-void _cpu_step() {
+void _cpu_step(mips_cpu *c) {
   uint32_t op, func, memoff, newpc, dummy;
   
-  SPC = PC;
-  op = cpu_read32(PC);
+  SPC = c->PC;
+  op = cpu_read32(c->PC);
   func = opfn(op);
   if (trace) {
-    cpu_showregs();
+    cpu_showregs(c);
     printf("GOT CODEZ: %.8x [%.4x] : ", op, func);
-    disasm(SPC, op);
+    disasm(c, SPC, op);
   }
-  PC += 4;
+  c->PC += 4;
 
   /* Lookup opcode and call function */
   opcode_t* o = getop(op);
   if (o->flag && o->mnem) {
     switch (o->flag) {
-    case RdRtI5: o->fn(Rd, Rt, i5); return;
-    case RdRtRs: o->fn(Rd, Rt, Rs); return;
-    case RdRsRt: o->fn(Rd, Rs, Rt); return;
-    case RtRsS16: o->fn(Rt, Rs, s16); return;
-    case RtRsI16: o->fn(Rt, Rs, i16); return;
-    case RtI16: o->fn(Rt, i16, 16); return;
-    case CRtRsS16: o->fn(CRt, Rs, s16); return;
+    case RdRtI5: o->fn(c, Rd, Rt, i5); return;
+    case RdRtRs: o->fn(c, Rd, Rt, Rs); return;
+    case RdRsRt: o->fn(c, Rd, Rs, Rt); return;
+    case RtRsS16: o->fn(c, Rt, Rs, s16); return;
+    case RtRsI16: o->fn(c, Rt, Rs, i16); return;
+    case RtI16: o->fn(c, Rt, i16, 16); return;
+    case CRtRsS16: o->fn(c, CRt, Rs, s16); return;
+    case copr0 ... copr3: mips_copr(c,op, o->flag - copr0); break;
     }
   }
 
   memoff = Rs+s16;
-  newpc = PC+s16*4;
+  newpc = c->PC+s16*4;
 
   bool islt = (int32_t)Rs < 0;
   bool islte = (int32_t)Rs <= 0;
   
   switch (func) {
     /* Function */
-  case 0x008: mips_setpc(true, Rs, NULL); break; // jr
-  case 0x009: mips_setpc(true, Rs, &Rd); break;  // jalr
-  case 0x00c: mips_syscall(regs[4]); break; // syscall
+  case 0x008: mips_setpc(c, true, Rs, NULL); break; // jr
+  case 0x009: mips_setpc(c, true, Rs, &Rd); break;  // jalr
+  case 0x00c: mips_syscall(c->regs[4]); break; // syscall
   case 0x00d: fi; // break;
-  case 0x010: Rd = rhi; break; // mfhi
-  case 0x012: Rd = rlo; break; // mflo
-  case 0x011: rhi = Rs; break; // mthi
-  case 0x013: rlo = Rs; break; // mtlo
+  case 0x010: Rd = c->rhi; break; // mfhi
+  case 0x012: Rd = c->rlo; break; // mflo
+  case 0x011: c->rhi = Rs; break; // mthi
+  case 0x013: c->rlo = Rs; break; // mtlo
 
-  case 0x018: mips_mult(SRs, SRt); break; // mult
-  case 0x019: mips_multu(Rs, Rt);  break; // multu
-  case 0x01a: mips_div(SRs, SRt);  break; // div
-  case 0x01b: mips_divu(Rs, Rt);   break; // divu
+  case 0x018: mips_mult(c, SRs, SRt); break; // mult
+  case 0x019: mips_multu(c, Rs, Rt);  break; // multu
+  case 0x01a: mips_div(c, SRs, SRt);  break; // div
+  case 0x01b: mips_divu(c, Rs, Rt);   break; // divu
 
     /* Opcode mode 1 */
-  case 0x040: mips_setpc(islt,  newpc, NULL); break; // bltz
-  case 0x041: mips_setpc(!islt, newpc, NULL); break; // bgez
-  case 0x050: mips_setpc(islt,  newpc, &ra); break; // bltzal
-  case 0x051: mips_setpc(!islt, newpc, &ra); break; // bgezal
+  case 0x040: mips_setpc(c, islt,  newpc, NULL); break; // bltz
+  case 0x041: mips_setpc(c, !islt, newpc, NULL); break; // bgez
+  case 0x050: mips_setpc(c, islt,  newpc, &c->ra); break; // bltzal
+  case 0x051: mips_setpc(c, !islt, newpc, &c->ra); break; // bgezal
 
     /* Opcode mode 2 */
-  case 0x102: mips_setpc(true, j26, NULL); break; // j
-  case 0x103: mips_setpc(true, j26, &ra); break; // jal
-  case 0x104: mips_setpc(Rs == Rt, newpc, NULL); break; // beq
-  case 0x105: mips_setpc(Rs != Rt, newpc, NULL); break; // bne
-  case 0x106: mips_setpc(islte,  newpc, NULL); break; // blez
-  case 0x107: mips_setpc(!islte, newpc, NULL); break; // bgtz
+  case 0x102: mips_setpc(c, true, j26, NULL); break; // j
+  case 0x103: mips_setpc(c, true, j26, &c->ra); break; // jal
+  case 0x104: mips_setpc(c, Rs == Rt, newpc, NULL); break; // beq
+  case 0x105: mips_setpc(c, Rs != Rt, newpc, NULL); break; // bne
+  case 0x106: mips_setpc(c, islte,  newpc, NULL); break; // blez
+  case 0x107: mips_setpc(c, !islte, newpc, NULL); break; // bgtz
 
-  case 0x110: mips_copr(op, 0); break; // copr0
-  case 0x111: mips_copr(op, 1); break; // copr1
-  case 0x112: mips_copr(op, 2); break; // copr2
-  case 0x113: mips_copr(op, 3); break; // copr3
+  case 0x110: mips_copr(c, op, 0); break; // copr0
+  case 0x111: mips_copr(c, op, 1); break; // copr1
+  case 0x112: mips_copr(c, op, 2); break; // copr2
+  case 0x113: mips_copr(c, op, 3); break; // copr3
     
   default:
     printf("Error: Unknown opcode: @ %.8x %.8x\n", SPC, op);
