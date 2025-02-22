@@ -1065,9 +1065,15 @@ struct Point {
     p.y = y + rhs.y;
     return p;
   };
+  Point operator-(const Point& rhs) const {
+    Point p;
+    p.x = x - rhs.x;
+    p.y = y - rhs.y;
+    return p;
+  };
   // cross product.... used for EDGE
-  auto cross(const Point& rhs) const {
-    return (x * rhs.y) - (y * rhs.x);
+  float cross(const Point& rhs) const {
+    return (float)(x * rhs.y) - (y * rhs.x);
   };
 };
 
@@ -1088,7 +1094,7 @@ struct Rect {
 /* RGB Color */
 struct Color {
   uint8_t r, g, b;
-  Color(uint32_t bgr = 0) {
+  Color(const uint32_t bgr = 0) {
     r = (bgr >> 0) & 0xFF;
     g = (bgr >> 8) & 0xFF;
     b = (bgr >> 16) & 0xFF;
@@ -1171,6 +1177,21 @@ struct gpu_t {
   Rect     bltRect, bltXY;
   uint32_t ret_data;
 
+  Color mergeclr(Color &c, int x, int y, int mode) {
+    uint32_t old = vram_getpix(x, y);
+    Color nc = c;
+    int r = (old >> 16) & 0xff;
+    int g = (old >> 8) & 0xff;
+    int b = (old >> 0) & 0xff;
+    switch(mode) {
+    case 0x0:
+      nc.r = (c.r * 0.5) + (r * 0.5);
+      nc.g = (c.g * 0.5) + (g * 0.5);
+      nc.b = (c.b * 0.5) + (b * 0.5);
+      break;
+    }
+    return nc;
+  }
   void copyvram(Rect src, Point dest) {
     for (int y = 0; y < src.h; y++) {
       for (int x = 0; x < src.w; x++) {
@@ -1182,23 +1203,59 @@ struct gpu_t {
   void fillrect(Rect dst, Color c) {
     for (int y = 0; y < dst.h; y++) {
       for (int x = 0; x < dst.w; x++) {
-	vram_setpix(dst.x + x, dst.y + y, c.getcolor());
+	vram_setpix(x, y, c.getcolor());
       }
     }
   };
   void fillrect(Point xy1, Point xy2, Color c) {
     for (int y = xy1.y; y < xy2.y; y++) {
       for (int x = xy1.x; x < xy2.x; x++) {
-	vram_setpix(x, y, c.getcolor());
+	Color mc;
+	mc.r = 0x55;
+	mc.g = 0x00;
+	mc.b = 0x00;
+	vram_setpix(xy1.x + x, xy1.y + y, mc.getcolor());
       }
     }
   };
-  void draw_gradient(Point& v0, Point& v1, Point& v2,
-		     Color& c0, Color& c1, Color& c2,
-		     int tx0, tx1, tx2, int mode)
-  {
-    
-  }
+  void filltri(int P0,int P1,int P2,int C0,int C1,int C2) {
+    Point p0(cmd_data[P0]);
+    Point p1(cmd_data[P1]);
+    Point p2(cmd_data[P2]);
+    Color c0(cmd_data[C0]);
+    Color c1(cmd_data[C1]);
+    Color c2(cmd_data[C2]);
+
+    printf("filltri.. : %d %d/%d %d/%d %d\n", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
+    auto edges = [](const Point& p0, const Point& p1, const Point& p2) {
+      return (float)(p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+    };
+    int min_x = std::min({p0.x, p1.x, p2.x});
+    int min_y = std::min({p0.y, p1.y, p2.y});
+    int max_x = std::max({p0.x, p1.x, p2.x});
+    int max_y = std::max({p0.y, p1.y, p2.y});
+
+    Point p;
+    float area = edges(p0, p1, p2);
+    for (p.y = min_y; p.y <= max_y; p.y++) {
+      for (p.x = min_x; p.x <= max_x; p.x++) {
+	float w0 = edges(p1, p2, p) / area;
+	float w1 = edges(p2, p0, p) / area;
+	float w2 = edges(p0, p1, p) / area;
+	if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+	  Color crgb;
+	  
+	  crgb.r = (int)(c0.r * w0 + c1.r * w1 + c2.r * w2);
+	  crgb.g = (int)(c0.g * w0 + c1.g * w1 + c2.g * w2);
+	  crgb.b = (int)(c0.b * w0 + c1.b * w1 + c2.b * w2);
+	  if (cmd & 0x2) {
+	    crgb = mergeclr(crgb, p.x, p.y, 0);
+	  }
+	  vram_setpix(p.x, p.y, crgb.getcolor());
+	}
+      }
+    }
+  };
   void setblt(Rect r) {
     bltRect = r;
     bltXY.x = 0;
@@ -1220,19 +1277,9 @@ struct gpu_t {
 
   // read/write pixel taking into account clipping
   void vram_setpix(int x, int y, color c, bool clip=true) {
-    if (clip) {
-      if (x < clip_ul.x || x > clip_lr.x ||
-	  y < clip_lr.y || y > clip_lr.y)) {
-      return;
-    }
     vram[(y * 1024) + x] = c;
   }
   color vram_getpix(int x, int y, bool clip=true) {
-    if (clip) {
-      if (x < clip_ul.x || x > clip_lr.x ||
-	  y < clip_lr.y || y > clip_lr.y)) {
-      return 0;
-    }
     return vram[(y * 1024) + x];
   };
   double mym;
@@ -1240,7 +1287,11 @@ struct gpu_t {
   void drawline(int x1, int x2, int y, Color c) {
     color cx = c.getcolor();
     while(x1 < x2) {
-      vram_setpix(x1++, y, cx);
+      Color cx = c;
+      if (cmd & 0x2) {
+	cx = mergeclr(c, x1, y, 0);
+      }
+      vram_setpix(x1++, y, cx.getcolor());
     }
   };
 
@@ -1358,48 +1409,23 @@ struct gpu_t {
       p[2] = p[0] + Point(16, 16);
       break;
     };
-    p[1].x = p[2].x;
-    p[1].y = p[0].y;
-    p[3].x = p[0].x;
-    p[3].y = p[2].y;
-#if 0
-    glBegin(GL_POLYGON);
-    for (int i = 0; i < 4; i++) {
-      mkvtx(p[i], cmd_data[cp]);
-      cp += ci;
-    }
-    glEnd();
-    glFlush();
-#endif
     fillrect(p[0], p[2], Color(cmd_data[0]));
   };
   void drawTriangle() {
-    int pi[] = { 1, 2, 3 };
-    int ci[] = { 0, 0, 0 };
-    
     switch (cmd_len) {
     case 4: // color,v1,v2,v3 mono
+      filltri(1,2,3,0,0,0);
       break;
     case 7: // color,v1,t1,v2,t2,v3,t3 textured
-      pi[1] = 3; pi[2] = 5;
+      filltri(1,3,5,0,0,0);
       break;
     case 6: // c1,v1,c2,v2,c3,v3 shaded
-      pi[1] = 3; pi[2] = 5;
-      ci[1] = 2; ci[2] = 4;
+      filltri(1,3,5,0,2,4);
       break;
     case 9: // c1,v1,t1,c2,v2,t2,c3,v3,t3 shaded textured
-      pi[1] = 4; pi[2] = 7;
-      ci[1] = 3; ci[2] = 6;
+      filltri(1,4,7,0,3,6);
       break;
     }
-#if 0
-    glBegin(GL_TRIANGLES);
-    for (int i = 0; i < 3; i++) {
-      mkvtx(cmd_data[pi[i]], cmd_data[ci[i]]);
-    }
-    glEnd();
-    glFlush();
-#endif
   }
   void drawQuad() {
     int ti[] = { -1, -1, -1, -1 };
@@ -1430,8 +1456,6 @@ struct gpu_t {
     for (int i = 0; i < 4; i++) {
       printf("p:%d c:%d t:%d\n", pi[i], ci[i], ti[i]);
     }
-#if 0
-    glBegin(GL_QUADS);
     Point p[4];
     for (int i = 0; i < 4; i++) {
       uint32_t tex = -1;
@@ -1439,11 +1463,7 @@ struct gpu_t {
       if (ti[i] != -1)
 	tex = cmd_data[ti[i]];
       p[i] = cmd_data[pi[i]];
-      mkvtx(cmd_data[pi[i]], cmd_data[ci[i]], tex);
     }
-    glEnd();
-    glFlush();
-#endif
     polyfill(4, p, Color(cmd_data[ci[0]]));
   }
   void reset() {
