@@ -15,7 +15,7 @@ gba: gba.cc $(STDH) $(ARMCPU) $(STDC)
 	$(LXCPP) $(CFLAGS) -o gba gba.cc $(ARMCPU) -DGBA $(STDC)
 
 psx: psx.cc cpu/mips.cc $(STDH) $(STDC)
-	$(LXCPP) $(CFLAGS) -o psx psx.cc -Wall $(STDC)
+	$(LXCPP) $(CFLAGS) -o psx psx.cc -Wall $(STDC) -DPSX
 
 psxgl: psx.cc cpu/mips.cc $(STDH) $(STDC)
 	$(LXCPP) $(CFLAGS) -o psx psx.cc cpu/mips.cc -DOPENGL -Wall -lGL $(STDC)

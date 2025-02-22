@@ -1429,7 +1429,7 @@ struct gpu_t {
   }
   void drawQuad() {
     int ti[] = { -1, -1, -1, -1 };
-    int pi[] = { 1, 2, 4, 3 };
+    int pi[] = { 1, 2, 3, 4 };
     int ci[] = { 0, 0, 0, 0 };
 
     switch (cmd_len) {
@@ -1438,33 +1438,23 @@ struct gpu_t {
     case 9: // c1,v1,t1,v2,t2,v3,t3,v4,t4 textured
       ti[0] = 2;
       pi[1] = 3; ti[1] = 4;
-      pi[2] = 7; ti[2] = 8;
-      pi[3] = 5; ti[3] = 6;
+      pi[2] = 5; ti[2] = 6;
+      pi[3] = 7; ti[3] = 8;
       break;
     case 8: // c1,v1,c2,v2,c3,v3,c4,v4 shaded
       ci[1] = 2; pi[1] = 3;
-      ci[2] = 6; pi[2] = 7;
-      ci[3] = 4; pi[3] = 5;
+      ci[2] = 4; pi[2] = 5;
+      ci[3] = 6; pi[3] = 7;
       break;
     case 12: // c1,v1,t1|c2,v2,t2|c3,v3,t3|c4,v4,t4 shaded textured
       ti[2] = 2;
       ci[1] = 3; pi[1] = 4;   ti[1] = 5;
-      ci[2] = 9; pi[2] = 10;  ti[2] = 11;
-      ci[3] = 6; pi[3] = 7;   ti[3] = 8;
+      ci[2] = 6; pi[2] = 7;   ti[2] = 8;
+      ci[3] = 9; pi[3] = 10;  ti[3] = 11;
       break;
     }
-    for (int i = 0; i < 4; i++) {
-      printf("p:%d c:%d t:%d\n", pi[i], ci[i], ti[i]);
-    }
-    Point p[4];
-    for (int i = 0; i < 4; i++) {
-      uint32_t tex = -1;
-
-      if (ti[i] != -1)
-	tex = cmd_data[ti[i]];
-      p[i] = cmd_data[pi[i]];
-    }
-    polyfill(4, p, Color(cmd_data[ci[0]]));
+    filltri(pi[0],pi[1],pi[2],ci[0],ci[1],ci[2]);
+    filltri(pi[1],pi[2],pi[3],ci[1],ci[2],ci[3]);
   }
   void reset() {
     vmode  = 0;
@@ -1516,6 +1506,14 @@ struct gpu_t {
     else if (cmd_pos < cmd_len) {
       return;
     }
+
+    /* commands:
+     * 1F = irq
+     * 20..3F : render polygons
+     * 40..5F : render lines
+     * 60..7F : renter rectangles
+     * E1..E6 : render attribs
+     */
     switch (cmd) {
     case 0x20: case 0x22: // 4 mono
     case 0x24 ... 0x27:   // 7 textured

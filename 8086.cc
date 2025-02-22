@@ -26,7 +26,10 @@
 int zprintf(const char *fmt, ...);
 #include "x86_audio.h"
 
+// put in place for 32/64-bit
 #define cpu_readv cpu_read16
+#define cpu_pushv cpu_push16
+#define cpu_popv  cpu_pop16
 
 int zprintf(const char *fmt, ...)
 {
@@ -476,14 +479,19 @@ void io_write(uint16_t addr, uint32_t val, int sz)
 
 uint32_t io_read(uint16_t addr, int sz)
 {
-  iodata_t val, tmp;
+  iodata_t val = 0, tmp = 0;
 
   sz &= SIZE_MASK;
   if (sz == SIZE_BYTE) {
-    io.read(addr, val);
+    if (io.read(addr, val)) {
+      return -1;
+    };
   }
   else {
-    io.read(addr, val);
+    printf("big ioread\n");
+    if (io.read(addr, val)) {
+      return -1;
+    }
     io.read(addr+1, tmp);
     val += (tmp << 8);
   }
@@ -2295,14 +2303,11 @@ static void x86_setpc(const bool cond, const uint16_t ncs, const uint16_t npc)
 enum {
   MRRF = 0,
 
-  FLAG_PFX = 0x01, 
-  FLAG_MRR = 0x02,
-  FLAG_GRP = 0x06,
-
-  PFX  = FLAG_PFX,
-  MRR  = FLAG_MRR,
-  GRP  = FLAG_GRP,
-
+  PFX  = 0x01,
+  MRR  = 0x02,
+  GRP  = 0x06,
+  REX  = 0x08,
+  
   /* Flag if group */
   GRP1 = 0x1000+MRR,
   GRP2 = 0x2000+MRR,
@@ -2494,12 +2499,6 @@ const char *grp3[] = { "test","???", "not", "neg", "mul", "imul","div", "idiv"};
 const char *grp4[] = { "inc", "dec", "???", "???", "???", "???", "???", "???" };
 const char *grp5[] = { "inc", "dec", "call","callf","jmp", "jmpf","push","???" };
 
-const char **Grps[] = {
-  grp1, grp2, grp3, grp4, grp5
-};
-
-int opcnt[256];
-
 static int cycles_8086[] = {
   [x86_aaa] = 8,
   [x86_aad] = 60,
@@ -2653,22 +2652,22 @@ constexpr opcode_t opix[] = {
   mkop(0x3e, x86_segpfx, rDS, __, __, __, PFX,   "<ds>"),
   mkop(0x3f, x86_aas,    __,  __, __, __, __,    "aas"),
 
-  mkop(0x40, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
-  mkop(0x41, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
-  mkop(0x42, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
-  mkop(0x43, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
-  mkop(0x44, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
-  mkop(0x45, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
-  mkop(0x46, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
-  mkop(0x47, x86_inc,    gv,  __, __,  3, __,    "inc      %gv"),
-  mkop(0x48, x86_dec,    gv,  __, __,  3, __,    "dec      %gv"),
-  mkop(0x49, x86_dec,    gv,  __, __,  3, __,    "dec      %gv"),
-  mkop(0x4a, x86_dec,    gv,  __, __,  3, __,    "dec      %gv"),
-  mkop(0x4b, x86_dec,    gv,  __, __,  3, __,    "dec      %gv"),
-  mkop(0x4c, x86_dec,    gv,  __, __,  3, __,    "dec      %gv"),
-  mkop(0x4d, x86_dec,    gv,  __, __,  3, __,    "dec      %gv"),
-  mkop(0x4e, x86_dec,    gv,  __, __,  3, __,    "dec      %gv"),
-  mkop(0x4f, x86_dec,    gv,  __, __,  3, __,    "dec      %gv"),
+  mkop(0x40, x86_inc,    gv,  __, __,  3, REX,   "inc      %gv"),
+  mkop(0x41, x86_inc,    gv,  __, __,  3, REX,   "inc      %gv"),
+  mkop(0x42, x86_inc,    gv,  __, __,  3, REX,   "inc      %gv"),
+  mkop(0x43, x86_inc,    gv,  __, __,  3, REX,   "inc      %gv"),
+  mkop(0x44, x86_inc,    gv,  __, __,  3, REX,   "inc      %gv"),
+  mkop(0x45, x86_inc,    gv,  __, __,  3, REX,   "inc      %gv"),
+  mkop(0x46, x86_inc,    gv,  __, __,  3, REX,   "inc      %gv"),
+  mkop(0x47, x86_inc,    gv,  __, __,  3, REX,   "inc      %gv"),
+  mkop(0x48, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
+  mkop(0x49, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
+  mkop(0x4a, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
+  mkop(0x4b, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
+  mkop(0x4c, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
+  mkop(0x4d, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
+  mkop(0x4e, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
+  mkop(0x4f, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
 
   mkop(0x50, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
   mkop(0x51, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
@@ -2793,8 +2792,8 @@ constexpr opcode_t opix[] = {
   mkop(0xc1, GRP2,       Ev,  Ib, __, __, GRP,   "%grp2    %Ev, %Ib"),
   mkop(0xc2, x86_ret,    Iw,  __, __, 24, __,    "ret      %Iw"),
   mkop(0xc3, x86_ret,    __,  __, __, 20, __,    "ret"),
-  mkop(0xc4, x86_les,    Gv,  Mp, __, __, MRR,   "les      %Gv, %Mp"),
-  mkop(0xc5, x86_lds,    Gv,  Mp, __, __, MRR,   "lds      %Gv, %Mp"),
+  mkop(0xc4, x86_les,    rES, Gv, Mp, __, MRR,   "les      %Gv, %Mp"),
+  mkop(0xc5, x86_lds,    rDS, Gv, Mp, __, MRR,   "lds      %Gv, %Mp"),
   mkop(0xc6, x86_mov,    Eb,  Ib, __, __, MRR,   "mov      %Eb, %Ib"),
   mkop(0xc7, x86_mov,    Ev,  Iv, __, __, MRR,   "mov      %Ev, %Iv"),
   mkop(0xc8, x86_enter,  Iw,  Ib, __, __, __,    "enter    %Iw, %Ib"),
@@ -3534,7 +3533,7 @@ bool x86_irq(bool test, int irq)
   }
   cpu_push16(cpu_getflags());
   cpu_push16(CS);
-  cpu_push16(PC);
+  cpu_pushv(PC);
   If = false;
   Tf = false;
   
@@ -3596,11 +3595,11 @@ const char *x86_dis(uint8_t op, uint32_t a0, uint32_t a1, uint32_t a2)
   else if (pfx == PFX_REPZ) {
     dst += snprintf(dst, 16, "repz   ");
   }
-  if (!(replace(&src, "GRP1", &dst, "%-8s", grp1[ggg]) ||
-	replace(&src, "GRP2", &dst, "%-8s", grp2[ggg]) ||
-	replace(&src, "GRP3", &dst, "%-8s", grp3[ggg]) ||
-	replace(&src, "GRP4", &dst, "%-8s", grp4[ggg]) ||
-	replace(&src, "GRP5", &dst, "%-8s", grp5[ggg])))
+  if (!(replace(&src, "%grp1", &dst, "%-8s", grp1[ggg]) ||
+	replace(&src, "%grp2", &dst, "%-8s", grp2[ggg]) ||
+	replace(&src, "%grp3", &dst, "%-8s", grp3[ggg]) ||
+	replace(&src, "%grp4", &dst, "%-8s", grp4[ggg]) ||
+	replace(&src, "%grp5", &dst, "%-8s", grp5[ggg])))
     {
       dst += snprintf(dst, 16, "%-8s", src);
     }
@@ -3639,8 +3638,8 @@ static void x86_loadptr(arg_t seg, arg_t ofs)
   uint32_t addr = mrr_base;
 
   /* Size=16/32 */
-  x86_set(ofs, cpu_read16(addr + 0));
-  x86_set(seg, cpu_readv(addr + 2));
+  x86_set(ofs, cpu_read16(mrr_base + 0));
+  x86_set(seg, cpu_readv(mrr_base + 2));
 }
 
 /* Execute an opcode with its arguments:
@@ -3707,14 +3706,14 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
     break;
   case x86_call:  // call Jv/Ev
     tmp = x86_get(arg0);
-    cpu_push16(PC);
+    cpu_pushv(PC);
     x86_setpc(true, CS, tmp);
     break;
   case x86_callf: // call Ap/Mp
     tmp = cpu_readv(mrr_base);
     ncs = cpu_read16(mrr_base + 2);
     cpu_push16(CS);
-    cpu_push16(PC);
+    cpu_pushv(PC);
     x86_setpc(true, ncs, tmp);
     break;
   case 0x70 ... 0x7f: // jcc Jb (cycs = 16/4)
@@ -3854,19 +3853,11 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
     x86_set(arg0, mrr_base - mrr_seg);
     break;
   case x86_lds:
-    x86_loadptr(rDS, arg0);
-    break;
   case x86_les:
-    x86_loadptr(rES, arg0);
-    break;
   case x86_lfs:
-    x86_loadptr(rFS, arg0);
-    break;
   case x86_lgs:
-    x86_loadptr(rGS, arg0);
-    break;
   case x86_lss:
-    x86_loadptr(rSS, arg0);
+    x86_loadptr(arg0, arg1);
     break;
   default:
     /* did not execute */
@@ -3950,6 +3941,7 @@ static void cpu_vm()
 // http://bitsavers.informatik.uni-stuttgart.de/pdf/intel/_dataBooks/1981_iAPX_86_88_Users_Manual.pdf
 /* Exec an x86 opcode */
 uint8_t visited[1024*1024];
+int opcnt[256];
 
 int cpu_step()
 {
@@ -3987,7 +3979,7 @@ int cpu_step()
     /* get mrr byte and opfn */
     if (opc.flag & MRR) {
       mrr = cpu_fetch8();
-      if ((opc.flag & GRP) != MRR) {
+      if ((opc.flag & GRP) == GRP) {
 	opc.opfn += mrr_ggg(mrr);
       }
     }
@@ -4147,8 +4139,8 @@ void dumpcfg(uint8_t *data, size_t size)
 	rep = opc.opfn;
 	break;
       }
-    } while (opc.flag & FLAG_PFX || op == 0x0f);
-    if (opc.flag & FLAG_MRR) {
+    } while ((opc.flag & PFX) != 0 || op == 0x0f);
+    if ((opc.flag & MRR) != 0) {
       mrr = data[off++];
       if ((mrr & 0xC7) == 0x06 || ((mrr & 0xC0) == 0x80)) {
 	// word offset

@@ -1720,11 +1720,11 @@ int main(int argc, char *argv[])
   const char *romfile = "Mac-Plus.ROM";
 
   gentbl();
-  if (argc > 2) {
+  if (argc > 2 && !strcmp(argv[1], "-json")) {
     const int memsize = 0x1000000;
     uint8_t *mem = new uint8_t[memsize]{0};
     sys.register_handler(0x000000, 0xFFFFFF, 0xFFFFFF, memio, mem, _RW, "ram");
-    read_json("test.json", regread, mem, runjson);
+    read_json(argv[2], regread, mem, runjson);
   }
   // Load disk image
   buf = loadrom(DISK, sz);

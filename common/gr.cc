@@ -671,13 +671,13 @@ const uint8_t *genbpp(int *line, int w, const uint8_t *mem, const int bpp)
 const uint8_t *genplane(int *line, int w, const uint8_t *mem, const int bpp, int step) {
   uint8_t mask = 0x80;
   for (int x = 0; x < w; x++) {
-    *line = 0;
+    int clr = 0;
     for (int p = 0; p < bpp; p++) {
       if (mem[p * step] & mask) {
-	*line |= (1 << p);
+	clr |= (1 << p);
       }
     }
-    line++;
+    *line++ = clr;
     if ((x & 7) == 7) {
       mem++;
     }
@@ -752,11 +752,15 @@ void draw_gradient(Screen *scr,
 {
   // shoelace formula for calculating area = cross product
   auto edge_function = [](const Point& p0, const Point &p1, const Point &p2) {
-    // return (p1.x - p0.x) * (p2.y - p0.x) - (p1.y - p0.y) * (p2.x - p0.x)
+    // return (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x)
+    //        _____________       xx          _____________      xx
     //   cross product of (p1-p0) and (p2 - p0)
     const Point a = p1 - p0;
     const Point b = p2 - p0;
     return a.cross(b);
+  };
+  auto ef2 = [](int c0, int v0, int c1, int v1) {
+    return (float)(c0 * v0) - (c1 * v1);
   };
   int min_x = std::min({x0, x1, x2, 0});
   int min_y = std::min({y0, y1, y2, 0});

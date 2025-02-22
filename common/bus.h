@@ -3,12 +3,14 @@
 #include <deque>
 #include <assert.h>
 
+#ifndef HAZ_IODATA
 #ifdef GBA
 typedef uint32_t iodata_t;
-#elif (defined(M68K) || defined(N64))
+#elif (defined(M68K) || defined(N64) || defined(PSX))
 typedef uint32_t iodata_t;
 #else
 typedef uint8_t  iodata_t;
+#endif
 #endif
 
 typedef int (*iofn_t)(void *arg, uint32_t addr, const int mode, iodata_t& val);
