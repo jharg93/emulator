@@ -1260,25 +1260,19 @@ struct gpu_t {
     for (int yc = 0; yc < h; yc++) {
       for (int xc = 0; xc < w; xc++) {
 	Color c = cmd_data[0];
-	if (!cmd_data[0]) {
-	  c = MKRGB(255,255,255);
-	}
 	int nx = (flip & 1) ? v.x - xc : v.x + xc;
 	int ny = (flip & 2) ? v.y - yc : v.y + yc;
 	if (cmd & ATTR_TEXTURE) {
 	  // get texel
 	  auto bb = get_texel(nx, ny, texp_x, texp_y, clutx, cluty, texp_d);
-	  if (!bb) {
+	  if (!bb.r && !bb.g && !bb.g) {
 	    goto skip;
 	  }
-	  float tr = (bb >> 16) & 0xff;
-	  float tg = (bb >> 8) & 0xff;
-	  float tb = (bb >> 0) & 0xff;
-	  
-	  float cr = (tr * c.r) / 128.0;
-	  float cg = (tg * c.g) / 128.0;
-	  float cb = (tb * c.b) / 128.0;
-	  c = Color(cr, cg, cb);
+	  if (cmd & ATTR_RAW) {
+	    c = bb;
+	  } else {
+	    c = mergeclr(bb, c, 128.0);
+	  }
 	}
 	if (cmd & ATTR_TRANSP) {
 	  c = transparent(c, xy1.x+xc, xy1.y+yc, 0);
@@ -1383,12 +1377,12 @@ struct gpu_t {
   void vram_setpix(int x, int y, color c, bool clip=true) {
     vram[(y * 1024) + x] = c;
   }
-  color get_texel(int tx, int ty, int tpx, int tpy, int clutx, int cluty, int depth) {
+  Color get_texel(int tx, int ty, int tpx, int tpy, int clutx, int cluty, int depth) {
     uint8_t ix = (tx & ~texw_mx) | (texw_ox & texw_mx);
     uint8_t iy = (ty & ~texw_my) | (texw_oy & texw_my);
 
     uint32_t pp = vram_getpix(tpx + ix, tpy + iy);
-    return pp;
+    return Color(pp >> 16, pp >> 8, pp);
   };
   color vram_getpix(int x, int y, bool clip=true) {
     return vram[(y * 1024) + x];
