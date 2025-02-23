@@ -1065,18 +1065,19 @@ struct Rect {
 
 /* RGB Color */
 struct Color {
-  uint8_t r, g, b;
+  uint8_t r, g, b, a;
   Color(const uint32_t bgr = 0) {
     r = (bgr >> 0) & 0xFF;
     g = (bgr >> 8) & 0xFF;
     b = (bgr >> 16) & 0xFF;
   };
-  Color(int _r, int _g, int _b, int clamp=false) {
+  Color(int _r, int _g, int _b, int _a=0, int clamp=false) {
     if (clamp) {
       _r = std::clamp(_r, 0, 255);
       _g = std::clamp(_g, 0, 255);
       _b = std::clamp(_b, 0, 255);
     }
+    a = _a;
     r = _r;
     g = _g;
     b = _b;
@@ -1290,6 +1291,7 @@ struct gpu_t {
     int tpy;
     int clut = 0;
     int tex = 0;
+    int transp;
     
     for (int i = 0; i < 3; i++) {
       v[i] = Point(cmd_data[pi[i]]);
@@ -1310,6 +1312,7 @@ struct gpu_t {
       clut = a >> 16;
       tex = b >> 16;
     }
+    transp = (cmd &  ATTR_TRANSP) != 0;
     printf("%sTri%s%s %d,%d, %d,%d, %d, %d,%d, %d,%d, 0x%x, %d,%d, %d,%d\n",
 	   (cmd & ATTR_TEXTURE) ? "Tex" : ((cmd & ATTR_SHADED) ? "Shade" : "???"),
 	   (cmd & ATTR_RAW) ? "Raw" : "Blend",
@@ -1336,14 +1339,18 @@ struct gpu_t {
 	float w1 = edge(v[2], v[0], p) / area;
 	float w2 = edge(v[0], v[1], p) / area;
 	if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-	  Color nc = (c[0] * w0) + (c[1] * w1) + (c[2] * w2);
-	  if (cmd & ATTR_TEXTURE) {
-	    auto tt = get_texel(U + 512, V, 0, 0, 0, 0, 2);
+	  Color nc = cmd_data[0];
 
-	    //nc = mergeclr(nc, tt, 128.0);
-	    //nc = Color(cr, cg, cb);
+	  if (cmd & ATTR_SHADED) {
+	    nc = (c[0] * w0) + (c[1] * w1) + (c[2] * w2);
 	  }
-	  if (cmd & ATTR_TRANSP) {
+	  if (cmd & ATTR_TEXTURE) {
+	    float tx = (t[0].x * w0) + (t[1].x * w1) + (t[2].x * w2);
+	    float ty = (t[0].y * w0) + (t[1].y * w1) + (t[2].y * w2);
+	    auto tt = get_texel(tx, ty, 512+tpx, tpy, 0, 0, 2);
+	    nc = mergeclr(nc, tt, 128.0);
+	  }
+	  if (transp) {
 	    nc = transparent(nc, p.x, p.y, 0);
 	  }
 	  vram_setpix(p.x, p.y, nc.getcolor());
@@ -1605,8 +1612,8 @@ struct gpu_t {
       printf(" GP0_CMD(%.2x.%.6x) : len=%d %s\n", cmd, data, cmd_len, kvlookup(gp0, cmd, "???"));
     }
     else if (cmd == GP0_COPY) {
-      vram_setpix(bltRect.x + bltXY.x + 0, bltRect.y + bltXY.y, BGRRGB(data & 0xFFFF));
-      vram_setpix(bltRect.x + bltXY.x + 1, bltRect.y + bltXY.y, BGRRGB(data >> 16));
+      vram_setpix(bltRect.x + bltXY.x + 0, bltRect.y + bltXY.y, BGRRGBA(data & 0xFFFF, data & 0x80008000));
+      vram_setpix(bltRect.x + bltXY.x + 1, bltRect.y + bltXY.y, BGRRGBA(data >> 16, data & 0x80008000));
       if (vramincr(2) < 0) {
 	cmd = GP0_NONE;
       }
@@ -1752,8 +1759,8 @@ struct gpu_t {
       xres = 1024;
       yres = 512;
       screen = new Screen(xres, yres, 20, 30, 0, NULL);
-      screen->xs = 1;
-      screen->ys = 1;
+      screen->xs = 2;
+      screen->ys = 2;
       screen->init(1);
       break;
     case 0x10: // get gpu info
