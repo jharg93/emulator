@@ -1284,6 +1284,11 @@ struct gpu_t {
     }
   };
   void filltri(int pi[3], int ci[3], int ti[3]) {
+    auto edge = [](const Point& p0, const Point& p1, const Point& p2) {
+      const Point a = p1 - p0;
+      const Point b = p2 - p0;
+      return a.cross(b);
+    };
     Point v[3], p;
     Color c[3];
     Texel t[3];
@@ -1297,6 +1302,13 @@ struct gpu_t {
       v[i] = Point(cmd_data[pi[i]]);
       c[i] = Color(cmd_data[ci[i]]);
     }
+    float area = edge(v[0], v[1], v[2]);
+    if (area < 0) {
+      printf("unwind...\n");
+      //std::swap(v[1], v[2]);
+      //std::swap(c[1], c[2]);
+      //std::swap(ti[1], ti[2]);
+    }
     if (ti[0] != -1) {
       // a = clutyyxx
       // b = pageyyxx
@@ -1307,10 +1319,10 @@ struct gpu_t {
       t[0] = a;
       t[1] = b;
       t[2] = c;
-      tpx = ((a >> 16) & 0xf) << 4;
-      tpy = ((a >> 16) & 0x10) << 4;
       clut = a >> 16;
       tex = b >> 16;
+      tpx = ((a >> 16) & 0xf) << 6;
+      tpy = ((a >> 16) & 0x10) << 4;
     }
     transp = (cmd &  ATTR_TRANSP) != 0;
     printf("%sTri%s%s %d,%d, %d,%d, %d, %d,%d, %d,%d, 0x%x, %d,%d, %d,%d\n",
@@ -1320,19 +1332,11 @@ struct gpu_t {
 	   v[0].x, v[0].y, t[0].x, t[0].y, clut,
 	   v[1].x, v[1].y, t[1].x, t[1].y, tex,
 	   v[2].x, v[2].y, t[2].x, t[2].y);
-	   
-    auto edge = [](const Point& p0, const Point& p1, const Point& p2) {
-      const Point a = p1 - p0;
-      const Point b = p2 - p0;
-      return a.cross(b);
-    };
     int min_x = std::min({v[0].x, v[1].x, v[2].x});
     int min_y = std::min({v[0].y, v[1].y, v[2].y});
     int max_x = std::max({v[0].x, v[1].x, v[2].x});
     int max_y = std::max({v[0].y, v[1].y, v[2].y});
 
-    float area = edge(v[0], v[1], v[2]);
-    int U = 0, V = 0;
     for (p.y = min_y; p.y <= max_y; p.y++) {
       for (p.x = min_x; p.x <= max_x; p.x++) {
 	float w0 = edge(v[1], v[2], p) / area;
@@ -1354,10 +1358,7 @@ struct gpu_t {
 	    nc = transparent(nc, p.x, p.y, 0);
 	  }
 	  vram_setpix(p.x, p.y, nc.getcolor());
-	  U++;
 	}
-	U = 0;
-	V++;
       }
     }
   };
@@ -1407,21 +1408,6 @@ struct gpu_t {
 
   /* Gets GP0 command length */
   int get_cmdlen(int cmd) {
-    //0010.0000 = 4
-    //0010.0010 = 4
-    //0010.1000 = 5 quad
-    //0010.1010 = 5 quad
-    //0010.01xx = 7 texture
-    //0010.11xx = 9 quad
-    //0011.0000 = 6 shaded
-    //0011.0010 = 6 shaded
-    //0011.1000 = 8
-    //0011.1001 = 8
-    //0011.1010 = 8
-    //0011.0100 = 9
-    //0011.0110 = 9
-    //0011.1100 = 12 quad
-    //0011.1110 = 12 quad
     switch (cmd) {
     case 0x00: return (0);
     case 0x01: return (0);
@@ -1563,7 +1549,7 @@ struct gpu_t {
       ci[3] = 6; pi[3] = 7;
       break;
     case 12: // c1,v1,t1|c2,v2,t2|c3,v3,t3|c4,v4,t4 shaded textured
-      ti[2] = 2;
+      ti[0] = 2;
       ci[1] = 3; pi[1] = 4;   ti[1] = 5;
       ci[2] = 6; pi[2] = 7;   ti[2] = 8;
       ci[3] = 9; pi[3] = 10;  ti[3] = 11;
