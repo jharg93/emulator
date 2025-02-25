@@ -17,7 +17,6 @@
 
 extern int trace, SPC;
 int psxlogfd;
-int frame;
 
 Screen *screen;
 
@@ -46,8 +45,6 @@ enum {
   DMABASE = 0x1080,
   DPCR    = 0x10F0,
   DICR    = 0x10F4,
-
-  SPUBASE = 0x1C00,
 };
 
 struct spuvoice_t {
@@ -185,6 +182,24 @@ enum {
   IO_START   = 0x00801000,
   IO_END     = 0x00803FFF,
   IO_SIZE    = 0x00003000,
+  
+  DMA_START  = 0x00801080,
+  DMA_END    = 0x008010fc,
+
+  TIMER_START= 0x00801000,
+  TIMER_END  = 0x0080112f,
+
+  CDROM_START= 0x00801800,
+  CDROM_END  = 0x00801803,
+
+  GPU_START  = 0x00801810,
+  GPU_END    = 0x00801814,
+
+  MDEC_START = 0x00801820,
+  MDEC_END   = 0x00801024,
+
+  SPU_START  = 0x00801c00,
+  SPU_END    = 0x00801dff,
   
   ROM_START  = 0x00C00000,
   ROM_END    = 0x00C7FFFF,
@@ -1021,21 +1036,21 @@ struct kv gp1[] = {
  */
 struct Point {
   int x, y;
-  static Point shift(uint32_t xy, int shift) {
+  static Point shift(uint32_t xy, int shift, bool signex = false) {
     const uint32_t mask = (1L << shift) - 1;
-    return Point (xy & mask, (xy >> shift) & mask);
+    return Point (xy & mask, (xy >> shift) & mask, signex ? 32-shift : 0);
   };
   Point(uint32_t xy = 0) {
     x = (xy & 0xffff);
     y = (xy >> 16) & 0xffff;
   };
-  Point(uint32_t _x, uint32_t _y, bool clamp = false) {
+  Point(uint32_t _x, uint32_t _y, int signex=0) {
     x = _x;
     y = _y;
-    if (clamp) {
-      x = std::clamp(x, -1024, 1024);
-      y = std::clamp(y, -1024, 1024);
-    }
+    if (signex) {
+      x = ((int32_t)(x << signex) >> signex);
+      y = ((int32_t)(y << signex) >> signex);
+    };
   };
   Point operator+(const Point& rhs) const {
     return Point(x + rhs.x, y + rhs.y);
@@ -1071,12 +1086,7 @@ struct Color {
     g = (bgr >> 8) & 0xFF;
     b = (bgr >> 16) & 0xFF;
   };
-  Color(int _r, int _g, int _b, int _a=0, int clamp=false) {
-    if (clamp) {
-      _r = std::clamp(_r, 0, 255);
-      _g = std::clamp(_g, 0, 255);
-      _b = std::clamp(_b, 0, 255);
-    }
+  Color(int _r, int _g, int _b, int _a=0) {
     a = _a;
     r = _r;
     g = _g;
@@ -1107,7 +1117,7 @@ Color mergeclr(const Color &lhs, const Color & rhs, float s) {
 }
 
 struct Texel {
-  int x, y;
+  float x,y;
 
   Texel(const uint32_t px=0) {
     x = (px & 0xff);
@@ -1117,11 +1127,11 @@ struct Texel {
     x = _x;
     y = _y;
   }
+  Texel operator+(const Texel&rhs) const {
+    return Texel(x + rhs.x, y + rhs.y);
+  };
   Texel operator*(float v) const {
     return Texel(x * v, y * v);
-  };
-  Texel operator+(const Texel&rhs) const {
-    return Texel(x * rhs.x, y + rhs.y);
   };
 };
 
@@ -1140,7 +1150,7 @@ struct Texel {
  *
  *
  */
-struct gpu_t {
+struct gpu_t : public crtc_t {
   enum {
     GP0_NONE = 0xFFFF,
     GP0_COPY = 0xdeadcafe,
@@ -1158,6 +1168,8 @@ struct gpu_t {
   Point sod;
 
   /* Horiz/Vert display range */
+  Point disp_h;
+  Point disp_v;
   uint32_t x1, x2;
   uint32_t y1, y2;
 
@@ -1200,9 +1212,12 @@ struct gpu_t {
   uint32_t ret_data;
 
   // Calculate pixel transparency
-  Color transparent(Color nc, int x, int y, int mode) {
+  Color blend(Color nc, int x, int y, int mode) {
     uint32_t old = vram_getpix(x, y);
     Color nr(old >> 16, old >> 8, old >> 0);
+    if (nc.getcolor() == 0) {
+      return nr;
+    }
     switch(mode) {
     case 0x0:
       return (nc * 0.5) + (nr * 0.5);
@@ -1276,31 +1291,36 @@ struct gpu_t {
 	  }
 	}
 	if (cmd & ATTR_TRANSP) {
-	  c = transparent(c, xy1.x+xc, xy1.y+yc, 0);
+	  c = blend(c, xy1.x+xc, xy1.y+yc, 0);
 	}
 	vram_setpix(xy1.x + xc, xy1.y + yc, c.getcolor());
       skip:
       }
     }
   };
-  void filltri(int pi[3], int ci[3], int ti[3]) {
+  void filltri(Point *v, Color *c, auto *ti, int clut=0, int tex=0)
+  {
+    Point p;
+    Texel t[3];
+    int tpx = 0;
+    int tpy = 0;
+    int transp = 0;
+    
     auto edge = [](const Point& p0, const Point& p1, const Point& p2) {
       const Point a = p1 - p0;
       const Point b = p2 - p0;
       return a.cross(b);
     };
-    Point v[3], p;
-    Color c[3];
-    Texel t[3];
-    int tpx;
-    int tpy;
-    int clut = 0;
-    int tex = 0;
-    int transp;
-    
-    for (int i = 0; i < 3; i++) {
-      v[i] = Point(cmd_data[pi[i]]);
-      c[i] = Color(cmd_data[ci[i]]);
+    auto TL = [](float z, const Point&a, const Point& b) {
+      return (z >= 0);
+    };
+    if (ti[0] != 0xffffffff) {
+      t[0] = ti[0];
+      t[1] = ti[1];
+      t[2] = ti[2];
+      tpx = (tex & 0x0f) * 64;
+      tpy = (tex & 0x10) << 4;
+      printf("tpx: %d,%d\n", tpx, tpy);
     }
     float area = edge(v[0], v[1], v[2]);
     if (area < 0) {
@@ -1308,21 +1328,6 @@ struct gpu_t {
       //std::swap(v[1], v[2]);
       //std::swap(c[1], c[2]);
       //std::swap(ti[1], ti[2]);
-    }
-    if (ti[0] != -1) {
-      // a = clutyyxx
-      // b = pageyyxx
-      // c = 0000yyxx
-      auto a = cmd_data[ti[0]];
-      auto b = cmd_data[ti[1]];
-      auto c = cmd_data[ti[2]];
-      t[0] = a;
-      t[1] = b;
-      t[2] = c;
-      clut = a >> 16;
-      tex = b >> 16;
-      tpx = ((a >> 16) & 0xf) << 6;
-      tpy = ((a >> 16) & 0x10) << 4;
     }
     transp = (cmd &  ATTR_TRANSP) != 0;
     printf("%sTri%s%s %d,%d, %d,%d, %d, %d,%d, %d,%d, 0x%x, %d,%d, %d,%d\n",
@@ -1342,24 +1347,28 @@ struct gpu_t {
 	float w0 = edge(v[1], v[2], p) / area;
 	float w1 = edge(v[2], v[0], p) / area;
 	float w2 = edge(v[0], v[1], p) / area;
-	if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-	  Color nc = cmd_data[0];
-
+	if (TL(w0,v[1],v[2]) && TL(w1,v[2],v[0]) && TL(w2,v[0],v[1])) {
+	  Color nc = c[0];
 	  if (cmd & ATTR_SHADED) {
 	    nc = (c[0] * w0) + (c[1] * w1) + (c[2] * w2);
 	  }
 	  if (cmd & ATTR_TEXTURE) {
-	    float tx = (t[0].x * w0) + (t[1].x * w1) + (t[2].x * w2);
-	    float ty = (t[0].y * w0) + (t[1].y * w1) + (t[2].y * w2);
-	    auto tt = get_texel(tx, ty, 512+tpx, tpy, 0, 0, 2);
+	    Texel txy = (t[0] * w0) + (t[1] * w1) + (t[2] * w2);
+	    //float tx = (t[0].x * w0) + (t[1].x * w1) + (t[2].x * w2);
+	    //float ty = (t[0].y * w0) + (t[1].y * w1) + (t[2].y * w2);
+	    auto tt = get_texel(txy.x, txy.y, tpx, tpy, 0, 0, 2);
+	    if (!tt.r && !tt.g && !tt.g) {
+	      goto skip;
+	    }
 	    nc = mergeclr(nc, tt, 128.0);
 	  }
 	  if (transp) {
-	    nc = transparent(nc, p.x, p.y, 0);
+	    nc = blend(nc, p.x, p.y, 0);
 	  }
 	  vram_setpix(p.x, p.y, nc.getcolor());
 	}
       }
+    skip:
     }
   };
   void setblt(Rect r) {
@@ -1386,8 +1395,8 @@ struct gpu_t {
     vram[(y * 1024) + x] = c;
   }
   Color get_texel(int tx, int ty, int tpx, int tpy, int clutx, int cluty, int depth) {
-    uint8_t ix = (tx & ~texw_mx) | (texw_ox & texw_mx);
-    uint8_t iy = (ty & ~texw_my) | (texw_oy & texw_my);
+    uint8_t ix = tx;
+    uint8_t iy = ty;
 
     uint32_t pp = vram_getpix(tpx + ix, tpy + iy);
     return Color(pp >> 16, pp >> 8, pp);
@@ -1400,7 +1409,7 @@ struct gpu_t {
     while(x1 < x2) {
       Color cx = c;
       if (cmd & 0x2) {
-	cx = transparent(c, x1, y, 0);
+	cx = blend(c, x1, y, 0);
       }
       vram_setpix(x1++, y, cx.getcolor());
     }
@@ -1408,23 +1417,26 @@ struct gpu_t {
 
   /* Gets GP0 command length */
   int get_cmdlen(int cmd) {
+    auto polylen = [&](int cmd) {
+      // shaded+texture = c0,v0,t0,c1,v1,t1 (3xnvtx) 12,7
+      // shaded=c0,v0,c1,v1 (2xnvtx)
+      // texture = c0,v0,t0,v1,t1... = (2xnvtx+1) 
+      // neither=c0,v0,v1... (nvtx+1)
+      int nvtx = (cmd & ATTR_QUAD) ? 4 : 3;
+      int count = nvtx+1;
+      if (cmd & ATTR_SHADED)
+	count += nvtx-1;
+      if (cmd & ATTR_TEXTURE)
+	count += nvtx;
+      return count;
+    };
     switch (cmd) {
     case 0x00: return (0);
     case 0x01: return (0);
     case 0x02: return (3); // fillrect
       /* Draw Polygon */
-    case 0x20: case 0x22: return (4);
-    case 0x28: case 0x2a: return (5);
-
-    case 0x24 ... 0x27:   return (7);
-    case 0x2c ... 0x2f:   return (9);
-
-    case 0x30: case 0x32: return (6);
-    case 0x38 ... 0x3a:   return (8);
-
-    case 0x34: case 0x36: return (9);
-    case 0x3c: case 0x3e: return (12);
-
+    case 0x20 ... 0x3f:
+      return polylen(cmd);
       /* Draw Line */
     case 0x40: case 0x42: return (3);
     case 0x48: case 0x4a: return (3 | VARLEN);
@@ -1498,66 +1510,33 @@ struct gpu_t {
     };
     fillrect(p[0], p[2]);
   };
-  void drawTriangle() {
-    int pi[] = { 1,2,3 };
-    int ci[] = { 0,0,0 };
-    int ti[] = {-1,-1,-1};
-
-    // 24 0010.0100 is the solid
-    // 26 0010.0110 is the transparent
-    // 34 0011.0100 is gradient
-    // 36 0011.0110 is gradient transparent
-    switch (cmd_len) {
-    case 4: // color,v0,v1,v2 mono
-      break;
-    case 6: // c0,v0,c1,v1,c2,v2 shaded
-      pi[1] = 3; ci[1] = 2;
-      pi[2] = 5; ci[2] = 4;
-      break;
-    case 7: // color,v0,t0,v1,t1,v2,t2 textured [24,26]
-      ti[0] = 2;
-      pi[1] = 3; ti[1] = 4;
-      pi[2] = 5; ti[2] = 6;
-      break;
-    case 9: // c0,v0,t0,c1,v1,t1,c2,v2,t2 shaded textured
-      ti[0] = 2;
-      pi[1] = 4; ci[1] = 3; ti[1] = 5;
-      pi[2] = 7; ci[2] = 6; ti[2] = 8;
-      break;
-    default:
-      assert(0);
+  void drawPoly() {
+    Color c[4];
+    Point v[4];
+    uint32_t t[4];
+    int pos = 1;
+    
+    /* 1,2 or 3 command words per vertex
+     * grad tex
+     *  n    n  c0,[v0],[v1],[v2],[v3]
+     *  n    y  c0,[v0,t0],[v1,t1],[v2,t2],[v3,t3]
+     *  y    n  [c0,v0],[c1,v1],[c2,v2],[c3,v3]
+     *  y    y  [c0,v0,t0],[c1,v1,t1],[c2,v2,t2],[c3,v3,t3]
+     */
+    int nvtx = (cmd & ATTR_QUAD) ? 4 : 3;
+    for (int i = 0; i < nvtx; i++) {
+      /* Get color, vertex, texel */
+      c[i] = (cmd & ATTR_SHADED && i > 0) ?
+	cmd_data[pos++] : cmd_data[0];
+      v[i] = cmd_data[pos++];
+      t[i] = (cmd & ATTR_TEXTURE) ?
+	cmd_data[pos++] : 0xffffffff;
     }
-    filltri(pi,ci,ti);
-  }
-  void drawQuad() {
-    int ti[] = { -1, -1, -1, -1 };
-    int pi[] = { 1, 2, 3, 4 };
-    int ci[] = { 0, 0, 0, 0 };
-
-    switch (cmd_len) {
-    case 5: // c1,v1,v2,v3,v4 mono
-      break;
-    case 9: // c1,v1,t1,v2,t2,v3,t3,v4,t4 textured
-      ti[0] = 2;
-      pi[1] = 3; ti[1] = 4;
-      pi[2] = 5; ti[2] = 6;
-      pi[3] = 7; ti[3] = 8;
-      break;
-    case 8: // c1,v1,c2,v2,c3,v3,c4,v4 shaded
-      ci[1] = 2; pi[1] = 3;
-      ci[2] = 4; pi[2] = 5;
-      ci[3] = 6; pi[3] = 7;
-      break;
-    case 12: // c1,v1,t1|c2,v2,t2|c3,v3,t3|c4,v4,t4 shaded textured
-      ti[0] = 2;
-      ci[1] = 3; pi[1] = 4;   ti[1] = 5;
-      ci[2] = 6; pi[2] = 7;   ti[2] = 8;
-      ci[3] = 9; pi[3] = 10;  ti[3] = 11;
-      break;
+    filltri(v, c, t, t[0] >> 16, t[1] >> 16);
+    if (cmd & ATTR_QUAD) {
+      filltri(&v[1], &c[1], &t[1], t[0] >> 16, t[1] >> 16);
     }
-    filltri(pi+0,ci+0,ti+0);
-    filltri(pi+1,ci+1,ti+1);
-  }
+  };
   void reset() {
     vmode  = 0;
     dither = false;
@@ -1576,6 +1555,35 @@ struct gpu_t {
     cmd_pos = 0;
   };
   uint32_t get_status() {
+    // 0-3   Texture page X Base   (N*64)                              ;GP0(E1h).0-3
+    // 4     Texture page Y Base 1 (N*256) (ie. 0, 256, 512 or 768)    ;GP0(E1h).4
+    // 5-6   Semi-transparency     (0=B/2+F/2, 1=B+F, 2=B-F, 3=B+F/4)  ;GP0(E1h).5-6
+    // 7-8   Texture page colors   (0=4bit, 1=8bit, 2=15bit, 3=Reserved)GP0(E1h).7-8
+    // 9     Dither 24bit to 15bit (0=Off/strip LSBs, 1=Dither Enabled);GP0(E1h).9
+    // 10    Drawing to display area (0=Prohibited, 1=Allowed)         ;GP0(E1h).10
+    // 11    Set Mask-bit when drawing pixels (0=No, 1=Yes/Mask)       ;GP0(E6h).0
+    // 12    Draw Pixels           (0=Always, 1=Not to Masked areas)   ;GP0(E6h).1
+    // 13    Interlace Field       (or, always 1 when GP1(08h).5=0)
+    // 14    Flip screen horizontally (0=Off, 1=On, v1 only)           ;GP1(08h).7
+    // 15    Texture page Y Base 2 (N*512) (only for 2 MB VRAM)        ;GP0(E1h).11
+    // 16    Horizontal Resolution 2     (0=256/320/512/640, 1=368)    ;GP1(08h).6
+    // 17-18 Horizontal Resolution 1     (0=256, 1=320, 2=512, 3=640)  ;GP1(08h).0-1
+    // 19    Vertical Resolution         (0=240, 1=480, when Bit22=1)  ;GP1(08h).2
+    // 20    Video Mode                  (0=NTSC/60Hz, 1=PAL/50Hz)     ;GP1(08h).3
+    // 21    Display Area Color Depth    (0=15bit, 1=24bit)            ;GP1(08h).4
+    // 22    Vertical Interlace          (0=Off, 1=On)                 ;GP1(08h).5
+    // 23    Display Enable              (0=Enabled, 1=Disabled)       ;GP1(03h).0
+    // 24    Interrupt Request (IRQ1)    (0=Off, 1=IRQ)       ;GP0(1Fh)/GP1(02h)
+    // 25    DMA / Data Request, meaning depends on GP1(04h) DMA Direction:
+    //       When GP1(04h)=0 ---> Always zero (0)
+    //       When GP1(04h)=1 ---> FIFO State  (0=Full, 1=Not Full)
+    //       When GP1(04h)=2 ---> Same as GPUSTAT.28
+    //       When GP1(04h)=3 ---> Same as GPUSTAT.27
+    // 26    Ready to receive Cmd Word   (0=No, 1=Ready)  ;GP0(...) ;via GP0
+    // 27    Ready to send VRAM to CPU   (0=No, 1=Ready)  ;GP0(C0h) ;via GPUREAD
+    // 28    Ready to receive DMA Block  (0=No, 1=Ready)  ;GP0(...) ;via GP0
+    // 29-30 DMA Direction (0=Off, 1=?, 2=CPUtoGP0, 3=GPUREADtoCPU)    ;GP1(04h).0-1
+    // 31    Drawing even/odd lines in interlace mode (0=Even or Vblank, 1=Odd)
 #if 1
     return gpu_status |
       (vmode << 16) | (pal << 20) | (dcd << 21) | (vint << 22) | (den << 23) |
@@ -1626,12 +1634,7 @@ struct gpu_t {
      */
     switch (cmd) {
     case 0x20 ... 0x3F:
-      if (cmd & ATTR_QUAD) {
-	drawQuad();
-      }
-      else {
-	drawTriangle();
-      }
+      drawPoly();
       break;
     case 0x40 ... 0x5f:
       drawLine();
@@ -1659,14 +1662,30 @@ struct gpu_t {
       printf("texw: %d %d %d %d\n", texw_mx, texw_my, texw_ox, texw_ox);
       break;
     case 0xE3: // set Drawing Area Upper Left
+      // 0-9    X-coordinate (0..1023)
+      // 10-18  Y-coordinate (0..511)   ;\on v0 GPU (max 1 MB VRAM)
+      // 19-23  Not used (zero)         ;/
+      // 10-19  Y-coordinate (0..1023)  ;\on v2 GPU (max 2 MB VRAM)
+      // 20-23  Not used (zero)         ;/
+      // 24-31  Command  (Exh)
       clip_ul = Point::shift(data, 10);
       printf("draw: %d %d\n", clip_ul.x, clip_ul.y);
       break;
     case 0xE4: // set Drawing Area Lower Right
+      // 0-9    X-coordinate (0..1023)
+      // 10-18  Y-coordinate (0..511)   ;\on v0 GPU (max 1 MB VRAM)
+      // 19-23  Not used (zero)         ;/
+      // 10-19  Y-coordinate (0..1023)  ;\on v2 GPU (max 2 MB VRAM)
+      // 20-23  Not used (zero)         ;/
+      // 24-31  Command  (Exh)
       clip_lr = Point::shift(data, 10);
       printf("draw: %d %d\n", clip_lr.x, clip_lr.y);
       break;
     case 0xe5: // set drawing offset
+      // 0-10   X-offset (-1024..+1023) (usually within X1,X2 of Drawing Area)
+      // 11-21  Y-offset (-1024..+1023) (usually within Y1,Y2 of Drawing Area)
+      // 22-23  Not used (zero)
+      // 24-31  Command  (E5h)
       draw_off.x = ((int32_t)(data & 0x7ff) << 21) >> 21;
       draw_off.y = ((int32_t((data >> 11) & 0x7ff) << 21) >> 21);
       printf("offset: %d %d\n", draw_off.x, draw_off.y);
@@ -1698,6 +1717,15 @@ struct gpu_t {
     printf(" GP1_CMD(%.2x.%.6x) : %s\n", cmd, data, kvlookup(gp1, cmd, "???"));
     switch (cmd) {
     case 0x00: // gpu reset (14802000)
+     // GP1(01h)      ;clear fifo
+      // GP1(02h)      ;ack irq (0)
+      // GP1(03h)      ;display off (1)
+      // GP1(04h)      ;dma off (0)
+      // GP1(05h)      ;display address (0)
+      // GP1(06h)      ;display x1,x2 (x1=200h, x2=200h+256*10)
+      // GP1(07h)      ;display y1,y2 (y1=010h, y2=010h+240)
+      // GP1(08h)      ;display mode 320x200 NTSC (0)
+      // GP0(E1h..E6h) ;rendering attributes (0)
       reset();
       printf("pre\n");
       printf("post\n");
@@ -1714,23 +1742,36 @@ struct gpu_t {
       dma = data & 0x3;
       break;
     case 0x05: // start of display area
+      // 0-9   X (0-1023)    (halfword address in VRAM)  (relative to begin of VRAM)
+      // 10-18 Y (0-511)     (scanline number in VRAM)   (relative to begin of VRAM)
+      // 19-23 Not used (zero)
       sod = Point(data, 10);
       printf("  sx:%4d sy:%4d\n", sod.x, sod.y);
       break;
     case 0x06: // horiz display range
-      // cccccccc.XXXXXXXX.XXXXxxxx.xxxxxxxx
+      // 0-11   X1 (260h+0)       ;12bit       ;\counted in video clock units,
+      // 12-23  X2 (260h+320*8)   ;12bit       ;/relative to HSYNC
       x1 = data & 0xFFF;
       x2 = (data >> 12) & 0xFFF;
       printf("  X1:%4d X2:%4d\n", x1, x2);
       break;
     case 0x07: // vert display range
-      // cccccccc.----YYYY.YYYYYYyy.yyyyyyyy
+      // 0-9   Y1 (NTSC=88h-(240/2), (PAL=A3h-(288/2))  ;\scanline numbers on screen,
+      // 10-19 Y2 (NTSC=88h+(240/2), (PAL=A3h+(288/2))  ;/relative to VSYNC
+      // 20-23 Not used (zero)
       y1 = data & 0x3FF;
       y2 = (data >> 10) & 0x3FF;
       printf("  Y1:%4d Y2:%4d\n", y1, y2);
       break;
     case 0x08: // display mode
-      // cccccccc.--------.--------.-v--dvvv
+      // 0-1   Horizontal Resolution 1  (0=256, 1=320, 2=512, 3=640) ;GPUSTAT.17-18
+      // 2     Vertical Resolution      (0=240, 1=480, when Bit5=1)  ;GPUSTAT.19
+      // 3     Video Mode               (0=NTSC/60Hz, 1=PAL/50Hz)    ;GPUSTAT.20
+      // 4     Display Area Color Depth (0=15bit, 1=24bit)           ;GPUSTAT.21
+      // 5     Vertical Interlace       (0=Off, 1=On)                ;GPUSTAT.22
+      // 6     Horizontal Resolution 2  (0=256/320/512/640, 1=368)   ;GPUSTAT.16
+      // 7     Flip screen horizontally (0=Off, 1=On, v1 only)       ;GPUSTAT.14
+      // 8-23  Not used (zero)      
       vmode = ((data & 7) << 1) | ((data >> 6) & 1);
       yres  = (vmode & 8) ? 480 : 240;
       dcd = !!(data & D4);
@@ -1755,6 +1796,17 @@ struct gpu_t {
     }
   };
   void drawgpu();
+  void init() {
+    crtc_t::init(640,30,480,40);
+  };
+  void setvblank(int state) {
+    printf("vblank\n");
+  };
+  void Tick() {
+    if (crtc_t::tick()) {
+      printf("end-of-frame\n");
+    }
+  };
 };
 
 struct edge_t {
@@ -1896,6 +1948,7 @@ void gpu_t::drawgpu() {
 
   screen->scrbox(clip_ul.x,clip_ul.y,clip_lr.x,clip_lr.y, MKRGB(0,255,0));
   screen->scrbox(0,0,512,256, MKRGB(3,252,182));
+  screen->draw();
   frame++;
 }
 
@@ -1966,7 +2019,7 @@ int gpuio(void *arg, uint32_t addr, int mode, iodata_t& data)
   return 0;
 }
 
-void dmaio(void *arg, uint32_t addr, int mode, iodata_t& data)
+int dmaio(void *arg, uint32_t addr, int mode, iodata_t& data)
 {
   dumpdma();
   mode &= 0xFF;
@@ -1974,6 +2027,32 @@ void dmaio(void *arg, uint32_t addr, int mode, iodata_t& data)
     /* Start XFER */
     run_dma((addr >> 4) & 7);
   }
+  return 0;
+}
+
+
+int spuio(void *arg, uint32_t addr, int mode, iodata_t& data)
+{
+  printf("@%.8x.%c: I/O: SPU               %.8x\n", addr, mode & 0xFF, data);
+  return 0;
+}
+
+int mdecio(void *arg, uint32_t addr, int mode, iodata_t& data)
+{
+  printf("@%.8x.%c: I/O: MDEC              %.8x\n", addr, mode & 0xFF, data);
+  return 0;
+}
+
+int cdrio(void *arg, uint32_t addr, int mode, iodata_t& data)
+{
+  printf("@%.8x.%c: I/O: CDROM             %.8x\n", addr, mode & 0xFF, data);
+  return 0;
+}
+
+int timerio(void *arg, uint32_t addr, int mode, iodata_t& data)
+{
+  printf("@%.8x.%c: I/O: TIMER             %.8x\n", addr, mode & 0xFF, data);
+  return 0;
 }
 
 /* 1070            w
@@ -1991,12 +2070,6 @@ int psxreg(void *arg, uint32_t addr, int mode, iodata_t& data)
   case 0x1040 ... 0x105e: printf("%.8x.%c: I/O: PERIPHERAL        %.8x\n", addr, mode & 0xFF, data); break;
   case 0x1060:            printf("%.8x.%c: I/O: MEMORY CONTROL2   %.8x\n", addr, mode & 0xFF, data); break;
   case 0x1070 ... 0x1074: printf("%.8x.%c: I/O: INTERRUPT CONTROL %.8x\n", addr, mode & 0xFF, data); break;
-  case 0x1080 ... 0x10FC: printf("%.8x.%c: I/O: DMA CONTROL       %.8x\n", addr, mode & 0xFF, data); dmaio(arg, addr & 0xFFFF, mode, data); break;
-  case 0x1100 ... 0x112F: printf("%.8x.%c: I/O: TIMER             %.8x\n", addr, mode & 0xFF, data); break;
-  case 0x1800 ... 0x1803: printf("%.8x.%c: I/O: CDROM             %.8x\n", addr, mode & 0xFF, data); break;
-  case 0x1810 ... 0x1814: /*printf("%.8x.%c: I/O: GPU               %.8x\n", addr, mode & 0xFF, data);*/ gpuio(arg, addr & 0xFFFF, mode, data); break;
-  case 0x1820 ... 0x1824: printf("%.8x.%c: I/O: MDEC              %.8x\n", addr, mode & 0xFF, data); break;
-  case 0x1c00 ... 0x1DFF: printf("%.8x.%c: I/O: SPU               %.8x\n", addr, mode & 0xFF, data); break;
   case 0x2041:            printf("%.8x.%c: I/O: TRACE             %.8x\n", addr, mode & 0xFF, data); break;
   default:                printf("%.8x.%c: I/O: ???               %.8x\n", addr, mode & 0xFF, data); break;
   }
@@ -2029,7 +2102,9 @@ void flogger(int lvl, const char *fmt, ...) {
 }
 
 
-/* 2 cycles per instruction, 16.9 million per sec , ~281666 cycles per frame */
+/* 2 cycles per instruction, 16.9 million per sec , ~281666 cycles per frame
+ * 640x480 = ~307200
+ */
 int cpu_step(mips_cpu *c)
 {
   uint32_t *regs = c->regs;
@@ -2037,27 +2112,20 @@ int cpu_step(mips_cpu *c)
   
   static uint32_t ctr;
 
-  if ((++ctr % 28000) == 0 && screen) {
+  gpu.Tick();
+  if ((++ctr % 19000) == 0 && screen) {
     ctr = 0;
     gpu.drawgpu();
-    screen->draw();
   }
 
-  /* Reset zero */
-  regs[0] = 0;
-  
   /* Sliding jumpslot */
   if (jmpslot[0] != 0xFFFFFFFF) {
     if (jmpslot[0] == 0xA0 || jmpslot[0] == 0xB0 || jmpslot[0] == 0xc0) {
-      hexdump(&ram[0x00], 256);
       // BIOS Call
       bios_call(c);
     }
     c->PC = jmpslot[0];
   }
-  jmpslot[0] = jmpslot[1];
-  jmpslot[1] = 0xFFFFFFFF;
-
   _cpu_step(c);
   return 0;
 }
@@ -2106,6 +2174,12 @@ int main(int argc, char *argv[])
   mmu.register_handler(RAM_START, RAM_END, 0x7FFFFF, psxram, ram,  _RW, "RAM");
   mmu.register_handler(SCR_START, SCR_END, 0x3FF,    psxscr, scr,  _RW, "SCRATCH");
   mmu.register_handler(IO_START,  IO_END,  0x3FFF,   psxreg, ioreg,_RW, "I/O");
+  mmu.register_handler(DMA_START, DMA_END, 0xFFFF,   dmaio,  ioreg,_RW, "DMA"); 
+  mmu.register_handler(GPU_START, GPU_END, 0xFFFF,   gpuio,  ioreg,_RW, "GPU");
+  mmu.register_handler(SPU_START, SPU_END, 0xFFFF,   spuio,  ioreg,_RW, "SPU");
+  mmu.register_handler(MDEC_START,MDEC_END,0xFFFF,   mdecio, ioreg,_RW, "MDEC");
+  mmu.register_handler(TIMER_START,TIMER_END,0xFFFF, timerio,ioreg,_RW, "TIMER");
+  mmu.register_handler(CDROM_START,CDROM_END,0xFFFF, cdrio,  ioreg,_RW, "CDROM");
   mmu.register_handler(ROM_START, ROM_END, 0x7FFFF,  psxrom, rom,  _RD, "bios.ROM");
 
   // print header
@@ -2133,6 +2207,7 @@ int main(int argc, char *argv[])
   //cpu_reset(hdr->ip & (RAM_SIZE-1));
 
   /* Run until 'LoadShell' */
+  gpu.init();
   while (c.jmpslot[0] != 0x80030000) {
     cpu_step(&c);
   }
