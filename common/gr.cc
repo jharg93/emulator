@@ -287,6 +287,17 @@ void Screen::scrrect(int x, int y, int w, int h, int fg) {
   }
 }
 
+void Screen::scrbox(int x0, int y0, int x1, int y1, int fg) {
+  for (int x = x0; x < x1; x++) {
+    setpixel(x, y0, fg);
+    setpixel(x, y1, fg);
+  }
+  for (int y = y0; y < y1; y++) {
+    setpixel(x0, y, fg);
+    setpixel(x1, y, fg);
+  }
+};
+
 #ifdef _NOSDL
 #include <termios.h>
 #define VK_LEFT   0x1b5b44

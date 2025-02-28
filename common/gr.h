@@ -130,6 +130,7 @@ class Screen {
   void drawbits(int x, int y, uint8_t bits, uint8_t *map, int n, int fg, int bg, int trans);
   void scrline(int x, int y, int len, int fg);
   void scrrect(int x, int y, int w, int h, int fb);
+  void scrbox(int x, int y, int w, int h, int fb);
   void draw();
   void clear(int clr = 0);
   void clrmem(int clr = 0);
@@ -154,8 +155,8 @@ class Screen {
 
 void waitFrame();
 
-static inline color MKRGB(int r, int g, int b) {
-  return ((r << 16) + (g << 8) + b);
+static inline color MKRGB(int r, int g, int b, int a = 0) {
+  return ((a << 24) + (r << 16) + (g << 8) + b);
 }
 static inline int RGB_R(int p) { return ((p >> 10) & 0x1F) * 4; }
 static inline int RGB_G(int p) { return ((p >> 5) & 0x1F)  * 4; }
@@ -171,6 +172,14 @@ static inline int BGRRGB(int p)
   int g = BGR_G(p);
   int b = BGR_B(p);
   return MKRGB(r,g,b);
+}
+
+static inline int BGRRGBA(int p, int a)
+{
+  int r = BGR_R(p);
+  int g = BGR_G(p);
+  int b = BGR_B(p);
+  return MKRGB(r,g,b, a==0 ? 0 : 0xff);
 }
 
 const uint8_t *genbpp(int *line, int, const uint8_t *, const int);

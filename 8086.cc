@@ -258,6 +258,15 @@ struct instr_t {
   const char *mnem;
 };
 
+enum CpuModel {
+  i8086,
+  i80186,
+  i80286,
+  i80386,
+};
+
+auto model = CpuModel::i8086;
+
 instr_t i;
 uint32_t& osize = i.osize;
 uint8_t&  mrr = i.mrr;
@@ -442,6 +451,32 @@ uint8_t cpu_read8(const uint32_t addr, int type)
   iodata_t val = 0;
   mb.read(addr, val);
   return val;
+}
+
+uint16_t mem_read16(const uint32_t seg, const uint32_t addr) {
+  uint16_t nbase, lo, hi;;
+
+  nbase = (addr - seg);
+  if (nbase != 0xffff) {
+    return cpu_read16(addr);
+  }
+  printf("eol\n");
+  lo = cpu_read8(seg + nbase++);
+  hi = cpu_read8(seg + nbase++);
+  return (hi << 8) + lo;
+}
+
+void mem_write16(const uint32_t seg, const uint32_t addr, const uint32_t nv) {
+  uint16_t nbase;
+
+  nbase = (addr - seg);
+  if (nbase != 0xffff) {
+    cpu_write16(addr, nv);
+    return;
+  }
+  printf("eol\n");
+  cpu_write8(seg + nbase++, nv);
+  cpu_write8(seg + nbase++, nv >> 8);
 }
 
 void cpu_write8(const uint32_t addr, uint8_t val, int type)
@@ -2259,7 +2294,9 @@ static uint32_t x86_setfl(uint32_t vv, uint32_t sz)
 static uint32_t x86_setoc(const arg_t& arg, uint32_t res, uint32_t of, uint32_t af, bool setcf = true)
 {
   x86_setfl(res, arg);
-  Af = (af & 0x10) == 0x10;
+  if (af >= 0) {
+    Af = (af & 0x10) == 0x10;
+  }
   Of = sf(of, arg);
   
   switch (vsize(arg, SIZE_MASK)) {
@@ -2303,19 +2340,22 @@ static void x86_setpc(const bool cond, const uint16_t ncs, const uint16_t npc)
 enum {
   MRRF = 0,
 
+  // opcode flag bits
   PFX  = 0x01,
   MRR  = 0x02,
   GRP  = 0x06,
   REX  = 0x08,
-  
+  QSZ  = 0x10, // default size 64
+  NO64 = 0x20, // not supported in 64-bit
+
   /* Flag if group */
-  GRP1 = 0x1000+MRR,
-  GRP2 = 0x2000+MRR,
-  GRP3 = 0x3000+MRR,
-  GRP4 = 0x4000+MRR,
-  GRP5 = 0x5000+MRR,
-  GRPF = 0x7000+MRR,
-  GRP0 = 0x8000+MRR,
+  GRP1 = 0x1000,
+  GRP2 = 0x2000,
+  GRP3 = 0x3000,
+  GRP4 = 0x4000,
+  GRP5 = 0x5000,
+  GRPF = 0x7000,
+  GRP0 = 0x8000,
 
   x86_segpfx = 0,
   x86_grp = 0,
@@ -2454,8 +2494,9 @@ enum {
   x86_rcr   = GRP2 + 3,
   x86_shl   = GRP2 + 4,
   x86_shr   = GRP2 + 5,
-  x86_sal   = GRP2 + 6, // invalid
+  x86_sal   = GRP2 + 6, // undocumented
   x86_sar   = GRP2 + 7,
+  x86_setmo = GRP2 + 8, // 8086
 
   /* f6, f7 */
   x86_test  = GRP3 + 0,
@@ -2669,22 +2710,22 @@ constexpr opcode_t opix[] = {
   mkop(0x4e, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
   mkop(0x4f, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
 
-  mkop(0x50, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x51, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x52, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x53, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x54, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x55, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x56, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x57, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x58, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x59, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5a, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5b, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5c, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5d, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5e, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5f, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
+  mkop(0x50, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x51, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x52, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x53, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x54, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x55, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x56, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x57, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x58, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x59, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5a, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5b, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5c, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5d, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5e, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5f, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
 
   mkop(0x60, x86_pusha,  __,  __, __, __, __,    "pusha"),
   mkop(0x61, x86_popa,   __,  __, __, __, __,    "popa"),
@@ -2824,16 +2865,16 @@ constexpr opcode_t opix[] = {
 
   mkop(0xe0, x86_loopnz, Jb,  __, __, __, __,    "loopnz   %Jb"),
   mkop(0xe1, x86_loopz,  Jb,  __, __, __, __,    "loopz    %Jb"),
-  mkop(0xe2, x86_loop,   Jb,  __, __, __, __,    "loop     %Jb"),
-  mkop(0xe3, x86_jcxz,   Jb,  __, __, __, __,    "jcxz     %Jb"),
+  mkop(0xe2, x86_loop,   Jb,  __, __, __, QSZ,   "loop     %Jb"),
+  mkop(0xe3, x86_jcxz,   Jb,  __, __, __, QSZ,   "jcxz     %Jb"),
   mkop(0xe4, x86_in,     rAL, Ib, __, 14, __,    "in       al, %Ib"),
   mkop(0xe5, x86_in,     rvAX,Ib, __, 14, __,    "in       %v0, %Ib"),
   mkop(0xe6, x86_out,    Ib,  rAL,__, 14, __,    "out      %Ib, al"),
   mkop(0xe7, x86_out,    Ib,  rvAX,__,14, __,    "out      %Ib, %v0"),
-  mkop(0xe8, x86_call,   Jv,  __, __, 23, __,    "call     %Jv"),
+  mkop(0xe8, x86_call,   Jv,  __, __, 23, QSZ,   "call     %Jv"),
   mkop(0xe9, x86_jmp,    Jv,  __, __, 15, __,    "jmp      %Jv"),
   mkop(0xea, x86_jmpf,   Ap,  __, __, 15, __,    "jmp      %Ap"),
-  mkop(0xeb, x86_jmp,    Jb,  __, __, 15, __,    "jmp      %Jb"),
+  mkop(0xeb, x86_jmp,    Jb,  __, __, 15, QSZ,   "jmp      %Jb"),
   mkop(0xec, x86_in,     rAL, rDX,__, 12, __,    "in       al, dx"),
   mkop(0xed, x86_in,     rvAX,rDX,__, 12, __,    "in       %v0, dx"),
   mkop(0xee, x86_out,    rDX, rAL,__, 12, __,    "out      dx, al"),
@@ -3037,19 +3078,19 @@ static uint32_t x86_get(const arg_t& arg)
     return cpu_read8(mrr_base);
   case Mw:
   case Mp:
-    return cpu_read16(mrr_base);
+    return mem_read16(mrr_seg, mrr_base);
   case Xb:
     tmp = advstr(rvSI, 1);
     return cpu_read8(tmp);
   case Xw:
     tmp = advstr(rvSI, 2);
-    return cpu_read16(tmp);
+    return mem_read16(mrr_seg, tmp);
   case Yb:
     tmp = advstr(rvDI, 1);
     return cpu_read8(tmp);
   case Yw:
     tmp = advstr(rvDI, 2);
-    return cpu_read16(tmp);
+    return mem_read16(mrr_seg, tmp);
   case 0x00:
     break;
   default:
@@ -3086,7 +3127,7 @@ static void x86_set(const arg_t& arg, uint32_t v, bool setflags)
     cpu_write8(mrr_base, v);
     break;
   case Mw: // 16-bit memory
-    cpu_write16(mrr_base, v);
+    mem_write16(mrr_seg, mrr_base, v);
     break;
   case Yb: // 8-bit memory, string op
     tmp = advstr(rvDI, 1);
@@ -3094,7 +3135,7 @@ static void x86_set(const arg_t& arg, uint32_t v, bool setflags)
     break;
   case Yw: // 16-bit memory, string op
     tmp = advstr(rvDI, 2);
-    cpu_write16(tmp, v);
+    mem_write16(mrr_seg, tmp, v);
     break;
   case SIZE_BYTE:
   case SIZE_WORD:
@@ -3231,7 +3272,6 @@ void x86_shiftop(int op, const arg_t& arg0, const arg_t& arg1) {
     break;
   case x86_rcr:
     count %= ((arg0 & SIZE_MASK) == SIZE_BYTE) ? 9 : 17;
-    // of ok
     Of = !!Cf ^ !!(v & msb_bit);
     for (int i = 1; i <= count; i++) {
       v = ror(v, !!Cf * msb_bit);
@@ -3270,6 +3310,7 @@ void x86_mathop(int op, const arg_t& arg0, const arg_t& arg1)
 
   a = x86_get(arg0);
   b = x86_get(arg1);
+  printf("alu: %.4x %.4x : %.4x\n", a, b, a&b);
   switch(op) {
   case x86_add: // ok
     c = a + b;
@@ -3658,7 +3699,7 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
 
   switch(opfn) {
   case x86_push:
-    if (arg0 == rvSP) {
+    if (model == CpuModel::i8086 && arg0 == rvSP) {
       /* 8086: 'push sp' pushes pre-decremented SP */
       cpu_push16(SP - 2);
       break;
@@ -3969,6 +4010,20 @@ int cpu_step()
       op = cpu_fetch8();
     }
 
+    // undocumented 8086 opcodes
+    // https://www.os2museum.com/wp/undocumented-8086-opcodes-part-i/
+    if (model == CpuModel::i8086) {
+      if (op >= 0x60 && op <= 0x6F) {
+	op += 0x10;	// equivalent to jcc Jb
+      }
+      else if (op == 0xc0 || op == 0xc1 || op == 0xc8 || op == 0xca) {
+	op += 0x2; // ret iw/ret
+      }
+      else if (op == 0xf1) {
+	op = 0xf0; // lock
+      }
+    }
+
     /* copy opcode */
     opc = opix[op];
     if (!opc.mnem) {
@@ -3988,9 +4043,11 @@ int cpu_step()
     switch ((op << 16) + opc.opfn) {
     case 0xf60000 + x86_test:
       opc.arg1 = Ib;
+      opc.mnem = "%grp3    %Eb, %Ib";
       break;
     case 0xf70000 + x86_test:
       opc.arg1 = Iv;
+      opc.mnem = "%grp3    %Ev, %Iv";
       break;
     }
 

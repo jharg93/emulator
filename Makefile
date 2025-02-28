@@ -54,8 +54,8 @@ atarixl: atarixl.cc cpu/cpu_6502.cc $(STDC)
 invaders: i8080.c common/bus.cc
 	$(LXCPP) $(CFLAGS) -o invaders i8080.c common/bus.cc common/gr.cc
 
-nes: cart.cc cpu/cpu_6502.cc ${STDC} nes.cc
-	$(LXCPP) $(CFLAGS) -o nes nes.cc cart.cc cpu/cpu_6502.cc $(STDC) -DNOFAKE
+nes: nes.cc cpu/cpu_6502.cc ${STDC} 
+	$(LXCPP) $(CFLAGS) -o nes nes.cc cpu/cpu_6502.cc $(STDC) -DNOFAKE
 
 
 .PHONY: clean

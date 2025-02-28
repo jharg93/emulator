@@ -59,14 +59,11 @@ class nescart : public cart, crtc_t {
   };
   nes_header *hdr;
   uint8_t    *prgRom;
-  uint8_t    *prgRam;
   uint8_t    *chrRom;
   int         prgRomSz;
   int         prgRamSz;
   int         chrRomSz;
-  uint32_t    romMask;
   uint8_t     nesram[0x800] = { 0 };
-  uint8_t     prgram[0x2000] = { 0 };
  public:
   mapper_t *mapper;
   int strobe[2];

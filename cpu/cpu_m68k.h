@@ -413,6 +413,10 @@ constexpr uint16_t condmap[] = {
 };
 
 bool testcond(const uint16_t op) {
+#if 0
+  int c = (op >> 8) & 0xF;
+  return (condmap[SR & 0xF] >> c) & 1;
+#else
   switch ((op >> 8) & 0xF) {
   case ccT:  return true;  // bra
   case ccF:  return false; // bsr
@@ -432,6 +436,7 @@ bool testcond(const uint16_t op) {
   case ccLE: return Zf || (Nf && !Vf) || (!Nf && Vf);
   }
   return false;
+#endif
 }
 /* Return operand size: ____.___._ss.___.___ */
 constexpr int opsize(const uint16_t op, const int sz) {
@@ -1245,13 +1250,13 @@ static void m68k_scc(instr_t& i)
 }
 
 // if condition, decrement Dy, if != 0xffff, jump */
-static void m68k_dbcc(instr_t& i, uint32_t& Dn, const uint32_t src)
+static void m68k_dbcc(instr_t& i, uint32_t Dn, const uint32_t src)
 {
   if (!testcond(i.op)) {
     // rflag=1,nonz
-    uint16_t db = --Dn;
+    uint16_t db = setea2(i, Dn - 1, Word, false);
     if (db != 0xffff) {
-      m68k_setpc(src, false, "");
+      PC = src;
     }
   }
 }
@@ -1653,11 +1658,8 @@ static void m68k_reset() {
 }
 
 static void m68k_link(uint32_t& An, int16_t imm) {
-  // SP=SP-4, M[SP] = An; An=SP; SP += d
-  SP -= 4;
-  cpu_write32(SP, An);
-  An = SP;
-  SP += imm;
+  cpu_push32(An);
+  An = sp_inc(imm);
 }
 
 static void m68k_unlink(uint32_t& An) {

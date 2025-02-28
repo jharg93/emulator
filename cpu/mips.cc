@@ -498,7 +498,12 @@ void cpu_showregs(mips_cpu *c)
 
 void _cpu_step(mips_cpu *c) {
   uint32_t op, func, memoff, newpc, dummy;
-  
+
+  c->jmpslot[0] = c->jmpslot[1];
+  c->jmpslot[1] = 0xFFFFFFFF;
+
+  // reset zero reg
+  c->regs[0] = 0;
   SPC = c->PC;
   op = cpu_read32(c->PC);
   func = opfn(op);

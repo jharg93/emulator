@@ -314,9 +314,12 @@ void dumpscr(int addr, int h, int w=320) {
 }
 
 struct sprite_t {
-  int x0, y0, y1;
+  // sprite control registers
   int pos;
   int ctl;
+  // sprite position
+  int x0, y0, y1;
+  // number of lines remaining
   int count;
   uint16_t p[4];
   int XPOS() const {
@@ -980,7 +983,7 @@ size_t loadrom(const char *name, uint32_t addr)
   return off;
 }
 
-// use ioreg16/ioreg32 to read from memory
+// use ioreg16/ioreg32 to access big-endian memory registers
 #define IOREG16(name, addr) ioreg16 name = ioreg16(addr);
 struct ioreg16 {
   void *ptr;
@@ -1236,6 +1239,8 @@ struct amiga : public bus_t, crtc_t, blitter_t {
   IOREG16(bplcon0, BPLCON0);
   IOREG16(bplcon1, BPLCON1);
   IOREG16(bplcon2, BPLCON2);
+
+  // return ioreg32 for bitplane pointer & data
   ioreg32 BPLxPTR(const int n) {
     return ioreg32(BPL1PTH + (n * 4));
   };
@@ -1922,33 +1927,33 @@ bool blitter_t::blt_tick()
  */
 void showcop(uint32_t pc, const char *lbl);
 
-enum {
+enum DmaCycle {
   Even,Odd,Dram,Disk,
 
   // low nybble is channel
-  aud0=0x10,
-  aud1=0x11,
-  aud2=0x12,
-  aud3=0x13,
+  Aud0=0x10,
+  Aud1=0x11,
+  Aud2=0x12,
+  Aud3=0x13,
 
   // low nybble sssD : s=spritenum, D=sprpos/sprctl or sprdata/sprdatb
-  spr0a=0x20,
-  spr1a=0x22,
-  spr2a=0x24,
-  spr3a=0x26,
-  spr4a=0x28,
-  spr5a=0x2a,
-  spr6a=0x2c,
-  spr7a=0x2e,
+  Spr0a=0x20,
+  Spr1a=0x22,
+  Spr2a=0x24,
+  Spr3a=0x26,
+  Spr4a=0x28,
+  Spr5a=0x2a,
+  Spr6a=0x2c,
+  Spr7a=0x2e,
 
-  spr0b=0x21,
-  spr1b=0x23,
-  spr2b=0x25,
-  spr3b=0x27,
-  spr4b=0x29,
-  spr5b=0x2b,
-  spr6b=0x2d,
-  spr7b=0x2f,
+  Spr0b=0x21,
+  Spr1b=0x23,
+  Spr2b=0x25,
+  Spr3b=0x27,
+  Spr4b=0x29,
+  Spr5b=0x2b,
+  Spr6b=0x2d,
+  Spr7b=0x2f,
 
   // low nybble
   // D = even/odd cycle
@@ -1974,15 +1979,15 @@ enum {
 static int lodma[] = {
   // 00
   Even, Dram, Even, Dram, Even, Dram, Even, Disk,
-  Even, Disk, Even, Disk, Even, aud0, Even, aud1,
+  Even, Disk, Even, Disk, Even, Aud0, Even, Aud1,
   // 10
-  Even, aud2, Even, aud3, Even, spr0a,Even, spr0b,
-  Even, spr1a,Even, spr1b,Even, spr2a,Even, spr2b,
+  Even, Aud2, Even, Aud3, Even, Spr0a,Even, Spr0b,
+  Even, Spr1a,Even, Spr1b,Even, Spr2a,Even, Spr2b,
   // 20
-  Even, spr3a,Even, spr3b,Even, spr4a,Even, spr4b,
-  Even, spr5a,Even, spr5b,Even, spr6a,Even, spr6b,
+  Even, Spr3a,Even, Spr3b,Even, Spr4a,Even, Spr4b,
+  Even, Spr5a,Even, Spr5b,Even, Spr6a,Even, Spr6b,
   // 30
-  Even, spr7a,Even, spr7b,Even, Odd,  Even, Odd,
+  Even, Spr7a,Even, Spr7b,Even, Odd,  Even, Odd,
   // 38 : 2 words
   Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
   Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
@@ -2027,15 +2032,15 @@ static int lodma[] = {
 static int hidma[] = {
   // 00
   Even, Dram, Even, Dram, Even, Dram, Even, Disk,
-  Even, Disk, Even, Disk, Even, aud0, Even, aud1,
+  Even, Disk, Even, Disk, Even, Aud0, Even, Aud1,
   // 10
-  Even, aud2, Even, aud3, Even, spr0a,Even, spr0b,
-  Even, spr1a,Even, spr1b,Even, spr2a,Even, spr2b,
+  Even, Aud2, Even, Aud3, Even, Spr0a,Even, Spr0b,
+  Even, Spr1a,Even, Spr1b,Even, Spr2a,Even, Spr2b,
   // 20
-  Even, spr3a,Even, spr3b,Even, spr4a,Even, spr4b,
-  Even, spr5a,Even, spr5b,Even, spr6a,Even, spr6b,
+  Even, Spr3a,Even, Spr3b,Even, Spr4a,Even, Spr4b,
+  Even, Spr5a,Even, Spr5b,Even, Spr6a,Even, Spr6b,
   // 30
-  Even, spr7a,Even, spr7b,Even, Odd,  Even, Odd,
+  Even, Spr7a,Even, Spr7b,Even, Odd,  Even, Odd,
   // 38 : 4 words
   bpl4, bpl2, bpl3, bpl1h,bpl4, bpl2, bpl3, bpl1h,
   bpl4, bpl2, bpl3, bpl1h,bpl4, bpl2, bpl3, bpl1h,
@@ -2133,10 +2138,10 @@ void amiga::dodma(int dc) {
   if (m >= bpl1) {
     m = bpdma(m);
   }
-  else if (m >= spr0a) {
+  else if (m >= Spr0a) {
     m = sprdma(m);
   }
-  else if (m >= aud0) {
+  else if (m >= Aud0) {
     m = auddma(m);
   }
   else if (m == Disk) {
@@ -2188,7 +2193,7 @@ int amiga::rxdma(ioreg16 dat, ioreg32 ptr, int dmamask, const char *lbl) {
   if (ptr != 0) {
     dat = blt_read('p', ptr, 2);
   }
-  printf("%.4x %.4x[%.4x] rxdma:%.8x=%.4x[%s]\n", vPos, hPos, (int)ddfstrt, addr, (int)dat, lbl); 
+  //printf("%.4x %.4x[%.4x] rxdma:%.8x=%.4x[%s]\n", vPos, hPos, (int)ddfstrt, addr, (int)dat, lbl); 
   return 0;
 }
 
@@ -2335,7 +2340,8 @@ void amiga::sethblank(bool state) {
   printf("--eol %d [%d]\n", vPos, screen.y0);
   
   if (vPos >= screen.y0) {
-    // draw sprite at end of line
+    // render sprite from back to front....
+    // covers priority for sprites
     for (int i = 6; i >= 0; i-=2) {
       if (attached(i)) {
 	renderspr(y, i, 99, &cpal[16]);
@@ -2353,7 +2359,17 @@ void amiga::sethblank(bool state) {
     }
     
     // draw bgline color
-    drawline(scr, bgline, 640, 0, y, 0);
+    int totlen = 0;
+    int start = 0;
+    if (bplcon0 & 0x8000) {
+      totlen = (ddfstop - ddfstrt) * 4;
+      start = 640 - totlen - 16;
+    }
+    else {
+      totlen = (ddfstop - ddfstrt) * 2;
+      start = 320 - totlen - 16;
+    }
+    drawline(scr, bgline+start, totlen, 0, y - screen.y0 + 10, 0);
     xline(bgline, 640, 0);
     
     totdma = 0;
@@ -2602,7 +2618,10 @@ void amiga::chip_write(uint32_t addr, uint32_t val, int n)
     printf("screen: %d, %d\n", screen.x0, screen.y0);
     break;
   case DIWSTOP:
-    /* Get LR screen dimensions */
+    /* Get LR screen dimensions
+     * X is always + 256
+     * Y is +256 if < 128  (128..255.000..127 -> 256..384)
+     */
     screen.x1 = 256 + (diwstrt & 0xff);
     screen.y1 = (diwstrt >> 8);
     if ((screen.y1 & 0x80) == 0)
@@ -2640,6 +2659,7 @@ void amiga::chip_write(uint32_t addr, uint32_t val, int n)
   case SPR5PTH:
   case SPR6PTH:
   case SPR7PTH:
+    // reset sprite count
     val = (addr - SPR0PTH)/4;
     sprites[val].count = 0;
     break;
@@ -2788,6 +2808,8 @@ void amiga::drawframe()
 	 dma_enabled(DMA_BPEN),
 	 cia_a.pra);
 
+  scr->scrbox(screen.x0, 0, screen.x1, screen.y1-screen.y0, MKRGB(255,255,0));
+
   /* Draw CIA pra/prb state */
   for (int i = 0; i < 8; i++) {
     int flsh, pramask = 0x2;
@@ -2857,11 +2879,11 @@ void amiga::drawframe()
 	       screen.x0, screen.y0, screen.x1, screen.y1, ds, de, count,
 	       count * 16, screen.y1 - screen.y0, 1L << bpu);
   scr->scrtext(0, h + 40, WHITE, "frame:%d fps:%.2f wdma:%d", frame, fps, wdma);
-
+#if 0
   draw_gradient(scr, 180, 250, 0xFF0000,
 		100,0, 0x0000FF,
 		200, 125, 0x00FF00);
-
+#endif
   scr->draw();
   scr->clear();
 }
@@ -3124,7 +3146,7 @@ int main(int argc, char *argv[])
   }
   
   // https://github.com/nicodex/amiga-ocs-cpubltro/blob/main/cpubltro.asm
-  thegame.init("roms/de-amiga-os-120.rom");
+  thegame.init("roms/de-amiga-os-204.rom");
   //thegame.init("cpubltro-0f8.rom");
   //thegame.init("emutos-amiga-rom-1.3//emutos-amiga.rom");
   //thegame.init("DiagROM/16bit.bin");

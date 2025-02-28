@@ -15,6 +15,7 @@
 
 #include "gte.h"
 
+int noclr;
 extern int trace, SPC;
 int psxlogfd;
 
@@ -1150,6 +1151,22 @@ struct Texel {
  *
  *
  */
+struct DrawMode {
+  int tx;
+  int ty;
+  int trans;
+  int depth;
+  int dither;
+  int flip;
+  DrawMode(uint32_t dm = 0) {
+    tx = (dm & 0xf) << 6;
+    ty = (dm & 0x10) << 4;
+    trans = (dm >> 5) & 3;
+    depth = (dm >> 7) & 3;
+    dither = (dm >> 9) & 1;
+  };
+};
+
 struct gpu_t : public crtc_t {
   enum {
     GP0_NONE = 0xFFFF,
@@ -1175,11 +1192,7 @@ struct gpu_t : public crtc_t {
 
   /* Get data from DrawMode */
   uint32_t gpu_status;
-  uint8_t tx;          // D0-3
-  uint8_t ty;          // D4
-  uint8_t trans;       // D5-6
-  uint8_t tpc;         // D7-8
-  uint8_t flip;        // D12-13
+  DrawMode dmode;
 
   /* tex page masks */
   int texw_mx;
@@ -1260,24 +1273,22 @@ struct gpu_t : public crtc_t {
     int pal = (cmd_data[2] >> 16);
     int clutx = (pal & 0x3f) << 4;
     int cluty = (pal >> 6) & 0x1ff;
-    int texp_x = (tx * 64);
-    int texp_y = (ty * 256);
-    int texp_d = tpc;
+    int texp_x = dmode.tx;
+    int texp_y = dmode.ty;
+    int texp_d = dmode.depth;
 
     int w = (xy2.x - xy1.x);
     int h = (xy2.y - xy1.y);
     printf("fillrect: %d,%d - %d x %d : %.2x flip:%x trans:%d\n",
-	   xy1.x, xy1.y, w, h, cmd & 0x1F, flip, trans);
+	   xy1.x, xy1.y, w, h, cmd & 0x1F, dmode.flip, dmode.trans);
     printf("  CLUT: %.4x %d,%d\n", cmd_data[2] >> 16, v.x, v.y);
     printf("  clutx: %d cluty: %d\n", clutx, cluty);
     printf("  texp_x: %d, texp_y: %d\n", texp_x, texp_y);
-    v.x+=512;
-    v.y+=0;
     for (int yc = 0; yc < h; yc++) {
       for (int xc = 0; xc < w; xc++) {
 	Color c = cmd_data[0];
-	int nx = (flip & 1) ? v.x - xc : v.x + xc;
-	int ny = (flip & 2) ? v.y - yc : v.y + yc;
+	int nx = (dmode.flip & 1) ? v.x - xc : v.x + xc;
+	int ny = (dmode.flip & 2) ? v.y - yc : v.y + yc;
 	if (cmd & ATTR_TEXTURE) {
 	  // get texel
 	  auto bb = get_texel(nx, ny, texp_x, texp_y, clutx, cluty, texp_d);
@@ -1298,8 +1309,9 @@ struct gpu_t : public crtc_t {
       }
     }
   };
-  void filltri(Point *v, Color *c, auto *ti, int clut=0, int tex=0)
+  void filltri(Point *v, Color *c, auto *ti, int clut=0, int tex=0, Color ixc = Color(255,0,0))
   {
+    DrawMode dm;
     Point p;
     Texel t[3];
     int tpx = 0;
@@ -1318,8 +1330,8 @@ struct gpu_t : public crtc_t {
       t[0] = ti[0];
       t[1] = ti[1];
       t[2] = ti[2];
-      tpx = (tex & 0x0f) * 64;
-      tpy = (tex & 0x10) << 4;
+      dm.tx = (tex & 0x0f) * 64;
+      dm.ty = (tex & 0x10) << 4;
       printf("tpx: %d,%d\n", tpx, tpy);
     }
     float area = edge(v[0], v[1], v[2]);
@@ -1353,17 +1365,19 @@ struct gpu_t : public crtc_t {
 	    nc = (c[0] * w0) + (c[1] * w1) + (c[2] * w2);
 	  }
 	  if (cmd & ATTR_TEXTURE) {
-	    Texel txy = (t[0] * w0) + (t[1] * w1) + (t[2] * w2);
-	    //float tx = (t[0].x * w0) + (t[1].x * w1) + (t[2].x * w2);
-	    //float ty = (t[0].y * w0) + (t[1].y * w1) + (t[2].y * w2);
-	    auto tt = get_texel(txy.x, txy.y, tpx, tpy, 0, 0, 2);
-	    if (!tt.r && !tt.g && !tt.g) {
+	    float tx = (t[0].x * w0) + (t[1].x * w1) + (t[2].x * w2);
+	    float ty = (t[0].y * w0) + (t[1].y * w1) + (t[2].y * w2);
+	    auto tt = get_texel(tx, ty, dm.tx, dm.ty, 0, 0, 2);
+	    if (!tt.getcolor()) {
 	      goto skip;
 	    }
 	    nc = mergeclr(nc, tt, 128.0);
 	  }
 	  if (transp) {
 	    nc = blend(nc, p.x, p.y, 0);
+	  }
+	  if (noclr) {
+	    nc = ixc;
 	  }
 	  vram_setpix(p.x, p.y, nc.getcolor());
 	}
@@ -1534,7 +1548,7 @@ struct gpu_t : public crtc_t {
     }
     filltri(v, c, t, t[0] >> 16, t[1] >> 16);
     if (cmd & ATTR_QUAD) {
-      filltri(&v[1], &c[1], &t[1], t[0] >> 16, t[1] >> 16);
+      filltri(&v[1], &c[1], &t[1], t[0] >> 16, t[1] >> 16, Color(255,255,0));
     }
   };
   void reset() {
@@ -1606,8 +1620,8 @@ struct gpu_t : public crtc_t {
       printf(" GP0_CMD(%.2x.%.6x) : len=%d %s\n", cmd, data, cmd_len, kvlookup(gp0, cmd, "???"));
     }
     else if (cmd == GP0_COPY) {
-      vram_setpix(bltRect.x + bltXY.x + 0, bltRect.y + bltXY.y, BGRRGBA(data & 0xFFFF, data & 0x80008000));
-      vram_setpix(bltRect.x + bltXY.x + 1, bltRect.y + bltXY.y, BGRRGBA(data >> 16, data & 0x80008000));
+      vram_setpix(bltRect.x + bltXY.x + 0, bltRect.y + bltXY.y, BGRRGB(data & 0xffff));
+      vram_setpix(bltRect.x + bltXY.x + 1, bltRect.y + bltXY.y, BGRRGB(data >> 16));
       if (vramincr(2) < 0) {
 	cmd = GP0_NONE;
       }
@@ -1643,16 +1657,22 @@ struct gpu_t : public crtc_t {
       drawRect();
       break;
     case 0xE1: // DrawMode
-      // cccccccc.________.__vhdaDp.pttyxxxx
+      // 0-3   Texture page X Base   (N*64) (ie. in 64-halfword steps)    ;GPUSTAT.0-3
+      // 4     Texture page Y Base   (N*256) (ie. 0 or 256)               ;GPUSTAT.4
+      // 5-6   Semi Transparency     (0=B/2+F/2, 1=B+F, 2=B-F, 3=B+F/4)   ;GPUSTAT.5-6
+      // 7-8   Texture page colors   (0=4bit, 1=8bit, 2=15bit, 3=Reserved);GPUSTAT.7-8
+      // 9     Dither 24bit to 15bit (0=Off/strip LSBs, 1=Dither Enabled) ;GPUSTAT.9
+      // 10    Drawing to display area (0=Prohibited, 1=Allowed)          ;GPUSTAT.10
+      // 11    Texture Disable (0=Normal, 1=Disable if GP1(09h).Bit0=1)   ;GPUSTAT.15
+      //       (Above might be chipselect for (absent) second VRAM chip?)
+      // 12    Textured Rectangle X-Flip   (BIOS does set this bit on power-up...?)
+      // 13    Textured Rectangle Y-Flip   (BIOS does set it equal to GPUSTAT.13...?)
+      // 14-23 Not used (should be 0)
+      // 24-31 Command  (E1h)
       gpu_status = data & 0x3FFF;
-      tx     = (data & 0xf);     // x*64
-      ty     = (data >> 4) & 1;  // y*256
-      trans  = (data >> 5) & 3;  // transparent mode
-      tpc    = (data >> 7) & 3;  // texture colors (0=4bit, 1=8bit, 2=15bit)
-      dither = (data >> 9) & 1;
-      flip   = (data >> 12) & 3; // x/y horiz flip
+      dmode = data;
       printf("drawmode: tx:%3d ty:%3d trans:%d depth:%d dither:%d flip:%x\n",
-	     tx, ty, trans, tpc, dither, flip);
+	     dmode.tx, dmode.ty, dmode.trans, dmode.depth, dmode.dither, dmode.flip);
       break;
     case 0xe2: // texture window
       texw_mx = ((cmd_data[0] >> 0) & 0x1f) << 3;
@@ -1895,28 +1915,28 @@ void setkeystate(int vk, int mask)
   JOY_L1     equ 0x0004 ; Joypad Input: L1       (Bit 2)
   JOY_R1     equ 0x0008 ; Joypad Input: R1       (Bit 3)
   JOY_T      equ 0x0010 ; Joypad Input: Triangle (Bit 4)
-  JOY_C      equ 0x0020 ; Joypad Input: Circle   (Bit 5)
-  JOY_X      equ 0x0040 ; Joypad Input: X        (Bit 6)
-  JOY_S      equ 0x0080 ; Joypad Input: Square   (Bit 7)
-  JOY_SELECT equ 0x0100 ; Joypad Input: Select   (Bit 8)
-  JOY_L3     equ 0x0200 ; Joypad Input: L3       (Bit 9)  (Analog Mode Only)
-  JOY_R3     equ 0x0400 ; Joypad Input: R3       (Bit 10) (Analog Mode Only)
-  JOY_START  equ 0x0800 ; Joypad Input: Start    (Bit 11)
-  JOY_UP     equ 0x1000 ; Joypad Input: Up       (Bit 12)
-  JOY_RIGHT  equ 0x2000 ; Joypad Input: Right    (Bit 13)
-  JOY_DOWN   equ 0x4000 ; Joypad Input: Down     (Bit 14)
-  JOY_LEFT   equ 0x8000 ; Joypad Input: Left     (Bit 15)
+  JOY_C      equ 0x0020 ; Joypad Input: Circle   (Bit 5)   .
+  JOY_X      equ 0x0040 ; Joypad Input: X        (Bit 6)   x
+  JOY_S      equ 0x0080 ; Joypad Input: Square   (Bit 7)   n
+  JOY_SELECT equ 0x0100 ; Joypad Input: Select   (Bit 8)   ,
+  JOY_L3     equ 0x0200 ; Joypad Input: L3       (Bit 9) 
+  JOY_R3     equ 0x0400 ; Joypad Input: R3       (Bit 10)
+  JOY_START  equ 0x0800 ; Joypad Input: Start    (Bit 11)  m
+  JOY_UP     equ 0x1000 ; Joypad Input: Up       (Bit 12)  i
+  JOY_RIGHT  equ 0x2000 ; Joypad Input: Right    (Bit 13)  l
+  JOY_DOWN   equ 0x4000 ; Joypad Input: Down     (Bit 14)  k
+  JOY_LEFT   equ 0x8000 ; Joypad Input: Left     (Bit 15)  j
 */
 
 enum {
   THPAD_UP = (1L << 12),
+  THPAD_RIGHT = (1L << 13),
   THPAD_DOWN = (1L << 14),
   THPAD_LEFT = (1L << 15),
-  THPAD_RIGHT = (1L << 13),
-  THPAD_S = (1L << 7),
-  THPAD_A = (1L << 11),
-  THPAD_B = (1L << 8),
   THPAD_C = (1L << 5),
+  THPAD_S = (1L << 7),
+  THPAD_B = (1L << 8),
+  THPAD_A = (1L << 11),
 };
 
 void gpu_t::drawgpu() {
@@ -1924,15 +1944,20 @@ void gpu_t::drawgpu() {
   time_t now;
   float fps;
 
+  if (screen->key('r', true)) {
+    noclr ^= 1;
+  }
   setkeystate('i', THPAD_UP);
   setkeystate('k', THPAD_DOWN);
   setkeystate('j', THPAD_LEFT);
   setkeystate('l', THPAD_RIGHT);
-  setkeystate('n', THPAD_S);
-  setkeystate('m', THPAD_A);
-  setkeystate(',', THPAD_B);
-  setkeystate('.', THPAD_C);
-
+  setkeystate(',', THPAD_B); // joy_select
+  setkeystate('m', THPAD_A); // joy_start, xrot
+  setkeystate('x', 1L << 6);
+  setkeystate('.', THPAD_C); // joy_c, yrot
+  setkeystate('n', THPAD_S); // joy_s
+  setkeystate('q', 0x08); // zrot
+  setkeystate('w', 0x2);
   cpu_write32(0x80010bdc, kp);
   
   now = time(NULL);
