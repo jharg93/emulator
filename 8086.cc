@@ -258,6 +258,15 @@ struct instr_t {
   const char *mnem;
 };
 
+enum CpuModel {
+  i8086,
+  i80186,
+  i80286,
+  i80386,
+};
+
+auto model = CpuModel::i8086;
+
 instr_t i;
 uint32_t& osize = i.osize;
 uint8_t&  mrr = i.mrr;
@@ -437,6 +446,32 @@ void x86_reset(const uint32_t ncs, const uint32_t npc)
 /*============================================================*
  * Common cpu read/write
  *============================================================*/
+uint16_t mem_read16(const uint32_t seg, const uint32_t addr) {
+  uint16_t nbase, lo, hi;;
+
+  nbase = (addr - seg);
+  if (nbase != 0xffff) {
+    return cpu_read16(addr);
+  }
+  printf("eol\n");
+  lo = cpu_read8(seg + nbase++);
+  hi = cpu_read8(seg + nbase++);
+  return (hi << 8) + lo;
+}
+
+void mem_write16(const uint32_t seg, const uint32_t addr, const uint32_t nv) {
+  uint16_t nbase;
+
+  nbase = (addr - seg);
+  if (nbase != 0xffff) {
+    cpu_write16(addr, nv);
+    return;
+  }
+  printf("eol\n");
+  cpu_write8(seg + nbase++, nv);
+  cpu_write8(seg + nbase++, nv >> 8);
+}
+
 uint8_t cpu_read8(const uint32_t addr, int type)
 {
   iodata_t val = 0;
@@ -2307,15 +2342,17 @@ enum {
   MRR  = 0x02,
   GRP  = 0x06,
   REX  = 0x08,
-  
+  QSZ  = 0x10, // default size 64
+  NO64 = 0x20, // not supported in 64-bit
+
   /* Flag if group */
-  GRP1 = 0x1000+MRR,
-  GRP2 = 0x2000+MRR,
-  GRP3 = 0x3000+MRR,
-  GRP4 = 0x4000+MRR,
-  GRP5 = 0x5000+MRR,
-  GRPF = 0x7000+MRR,
-  GRP0 = 0x8000+MRR,
+  GRP1 = 0x1000,
+  GRP2 = 0x2000,
+  GRP3 = 0x3000,
+  GRP4 = 0x4000,
+  GRP5 = 0x5000,
+  GRPF = 0x7000,
+  GRP0 = 0x8000,
 
   x86_segpfx = 0,
   x86_grp = 0,
@@ -2349,11 +2386,6 @@ enum {
   x86_scasw = 0xaf,
   x86_enter = 0xc8,
   x86_leave = 0xc9,
-  x86_les = 0xc4,
-  x86_lds = 0xc5,
-  x86_lss = 0xfb2,
-  x86_lfs = 0xfb4,
-  x86_lgs = 0xfb5,
   x86_into = 0xce,
   x86_iret = 0xcf,
   x86_aam = 0xd4,
@@ -2376,22 +2408,8 @@ enum {
   x86_std = 0xfd,
   x86_cwd = 0x99,
 
-  x86_jo = 0x70,
-  x86_jno = 0x71,
-  x86_jb = 0x72,
-  x86_jnb = 0x73,
-  x86_jz = 0x74,
-  x86_jnz = 0x75,
-  x86_jbe = 0x76,
-  x86_ja = 0x77,
-  x86_js = 0x78,
-  x86_jns = 0x79,
-  x86_jpe = 0x7a,
-  x86_jpo = 0x7b,
-  x86_jl = 0x7c,
-  x86_jge = 0x7d,
-  x86_jle = 0x7e,
-  x86_jg = 0x7f,
+  x86_jcc = 0x70,
+  x86_setcc = 0xf90,
 
   // first instance
   x86_in = 0xe4,
@@ -2410,6 +2428,7 @@ enum {
   x86_stos = 0xaa,
   x86_lods = 0xac,
   x86_scas = 0xae,
+  x86_ldseg = 0x100,
   
   // 386
   x86_bsf = MRRF + 0xfbc,
@@ -2489,8 +2508,6 @@ struct opcode_t {
   uint32_t arg0;
   uint32_t arg1;
   uint32_t arg2;
-
-  void (*execfn)(opcode_t *o, int, int, int);
 };
 
 const char *grp1[] = { "add", "or",  "adc", "sbb", "and", "sub", "xor", "cmp" };
@@ -2583,6 +2600,54 @@ constexpr opcode_t mkop(int id, int opfn, uint32_t a0, uint32_t a1, uint32_t a2,
 #define __ 0
 
 /* Build up X86 opcode table */
+// https://pdos.csail.mit.edu/6.828/2014/readings/i386/appa.htm
+constexpr opcode_t op0f[] = {
+  [0x80] = 
+  mkop(0x80, x86_jcc,    Jv,  __, __, __, __,    "jo       %Jv"),
+  mkop(0x81, x86_jcc,    Jv,  __, __, __, __,    "jno      %Jv"),
+  mkop(0x82, x86_jcc,    Jv,  __, __, __, __,    "jb       %Jv"),
+  mkop(0x83, x86_jcc,    Jv,  __, __, __, __,    "jnb      %Jv"),
+  mkop(0x84, x86_jcc,    Jv,  __, __, __, __,    "jz       %Jv"),
+  mkop(0x85, x86_jcc,    Jv,  __, __, __, __,    "jnz      %Jv"),
+  mkop(0x86, x86_jcc,    Jv,  __, __, __, __,    "jbe      %Jv"),
+  mkop(0x87, x86_jcc,    Jv,  __, __, __, __,    "ja       %Jv"),
+  mkop(0x88, x86_jcc,    Jv,  __, __, __, __,    "js       %Jv"),
+  mkop(0x89, x86_jcc,    Jv,  __, __, __, __,    "jns      %Jv"),
+  mkop(0x8a, x86_jcc,    Jv,  __, __, __, __,    "jpe      %Jv"),
+  mkop(0x8b, x86_jcc,    Jv,  __, __, __, __,    "jpo      %Jv"),
+  mkop(0x8c, x86_jcc,    Jv,  __, __, __, __,    "jl       %Jv"),
+  mkop(0x8d, x86_jcc,    Jv,  __, __, __, __,    "jge      %Jv"),
+  mkop(0x8e, x86_jcc,    Jv,  __, __, __, __,    "jle      %Jv"),
+  mkop(0x8f, x86_jcc,    Jv,  __, __, __, __,    "jg       %Jv"),
+
+  mkop(0x90, x86_setcc,  Eb,  __, __, __, MRR,   "seto     %Eb"),
+  mkop(0x91, x86_setcc,  Eb,  __, __, __, MRR,   "setno    %Eb"),
+  mkop(0x92, x86_setcc,  Eb,  __, __, __, MRR,   "setb     %Eb"),
+  mkop(0x93, x86_setcc,  Eb,  __, __, __, MRR,   "setnb    %Eb"),
+  mkop(0x94, x86_setcc,  Eb,  __, __, __, MRR,   "setz     %Eb"),
+  mkop(0x95, x86_setcc,  Eb,  __, __, __, MRR,   "setnz    %Eb"),
+  mkop(0x96, x86_setcc,  Eb,  __, __, __, MRR,   "setbe    %Eb"),
+  mkop(0x97, x86_setcc,  Eb,  __, __, __, MRR,   "seta     %Eb"),
+  mkop(0x98, x86_setcc,  Eb,  __, __, __, MRR,   "sets     %Eb"),
+  mkop(0x99, x86_setcc,  Eb,  __, __, __, MRR,   "setns    %Eb"),
+  mkop(0x9a, x86_setcc,  Eb,  __, __, __, MRR,   "setpe    %Eb"),
+  mkop(0x9b, x86_setcc,  Eb,  __, __, __, MRR,   "setpo    %Eb"),
+  mkop(0x9c, x86_setcc,  Eb,  __, __, __, MRR,   "setl     %Eb"),
+  mkop(0x9d, x86_setcc,  Eb,  __, __, __, MRR,   "setge    %Eb"),
+  mkop(0x9e, x86_setcc,  Eb,  __, __, __, MRR,   "setle    %Eb"),
+  mkop(0x9f, x86_setcc,  Eb,  __, __, __, MRR,   "setg     %Eb"),
+
+  mkop(0xa0, x86_push,   rFS, __, __, 14, __,    "push     fs"),
+  mkop(0xa1, x86_pop,    rFS, __, __, 12, __,    "pop      fs"),
+  [0xa8] =
+  mkop(0xa8, x86_push,   rGS, __, __, 14, __,    "push     gs"),
+  mkop(0x09, x86_pop,    rGS, __, __, 12, __,    "pop      gs"),
+  [0xb2] =
+  mkop(0xb2, x86_ldseg,  rSS, Gv, Mp, __, MRR,   "lss      %Gv, %Mp"),
+  mkop(0xb4, x86_ldseg,  rFS, Gv, Mp, __, MRR,   "lfs      %Gv, %Mp"),
+  mkop(0xb5, x86_ldseg,  rGS, Gv, Mp, __, MRR,   "lgs      %Gv, %Mp"),
+};
+
 constexpr opcode_t opix[] = {
   mkop(0x00, x86_add,    Eb,  Gb, __, __, MRR,   "add      %Eb, %Gb"),
   mkop(0x01, x86_add,    Ev,  Gv, __, __, MRR,   "add      %Ev, %Gv"),
@@ -2669,22 +2734,22 @@ constexpr opcode_t opix[] = {
   mkop(0x4e, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
   mkop(0x4f, x86_dec,    gv,  __, __,  3, REX,   "dec      %gv"),
 
-  mkop(0x50, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x51, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x52, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x53, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x54, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x55, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x56, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x57, x86_push,   gv,  __, __, 15, __,    "push     %gv"),
-  mkop(0x58, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x59, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5a, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5b, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5c, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5d, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5e, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
-  mkop(0x5f, x86_pop,    gv,  __, __, 12, __,    "pop      %gv"),
+  mkop(0x50, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x51, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x52, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x53, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x54, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x55, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x56, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x57, x86_push,   gv,  __, __, 15, QSZ,   "push     %gv"),
+  mkop(0x58, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x59, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5a, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5b, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5c, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5d, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5e, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
+  mkop(0x5f, x86_pop,    gv,  __, __, 12, QSZ,   "pop      %gv"),
 
   mkop(0x60, x86_pusha,  __,  __, __, __, __,    "pusha"),
   mkop(0x61, x86_popa,   __,  __, __, __, __,    "popa"),
@@ -2703,22 +2768,22 @@ constexpr opcode_t opix[] = {
   mkop(0x6e, x86_outs,   rDX, Xb, __, __, __,    "outsb"),
   mkop(0x6e, x86_outs,   rDX, Xv, __, __, __,    "outsw"),
 
-  mkop(0x70, x86_jo,     Jb,  __, __, __, __,    "jo       %Jb"),
-  mkop(0x71, x86_jno,    Jb,  __, __, __, __,    "jno      %Jb"),
-  mkop(0x72, x86_jb,     Jb,  __, __, __, __,    "jb       %Jb"),
-  mkop(0x73, x86_jnb,    Jb,  __, __, __, __,    "jnb      %Jb"),
-  mkop(0x74, x86_jz,     Jb,  __, __, __, __,    "jz       %Jb"),
-  mkop(0x75, x86_jnz,    Jb,  __, __, __, __,    "jnz      %Jb"),
-  mkop(0x76, x86_jbe,    Jb,  __, __, __, __,    "jbe      %Jb"),
-  mkop(0x77, x86_ja,     Jb,  __, __, __, __,    "ja       %Jb"),
-  mkop(0x78, x86_js,     Jb,  __, __, __, __,    "js       %Jb"),
-  mkop(0x79, x86_jns,    Jb,  __, __, __, __,    "jns      %Jb"),
-  mkop(0x7a, x86_jpe,    Jb,  __, __, __, __,    "jpe      %Jb"),
-  mkop(0x7b, x86_jpo,    Jb,  __, __, __, __,    "jpo      %Jb"),
-  mkop(0x7c, x86_jl,     Jb,  __, __, __, __,    "jl       %Jb"),
-  mkop(0x7d, x86_jge,    Jb,  __, __, __, __,    "jge      %Jb"),
-  mkop(0x7e, x86_jle,    Jb,  __, __, __, __,    "jle      %Jb"),
-  mkop(0x7f, x86_jg,     Jb,  __, __, __, __,    "jg       %Jb"),
+  mkop(0x70, x86_jcc,    Jb,  __, __, __, __,    "jo       %Jb"),
+  mkop(0x71, x86_jcc,    Jb,  __, __, __, __,    "jno      %Jb"),
+  mkop(0x72, x86_jcc,    Jb,  __, __, __, __,    "jb       %Jb"),
+  mkop(0x73, x86_jcc,    Jb,  __, __, __, __,    "jnb      %Jb"),
+  mkop(0x74, x86_jcc,    Jb,  __, __, __, __,    "jz       %Jb"),
+  mkop(0x75, x86_jcc,    Jb,  __, __, __, __,    "jnz      %Jb"),
+  mkop(0x76, x86_jcc,    Jb,  __, __, __, __,    "jbe      %Jb"),
+  mkop(0x77, x86_jcc,    Jb,  __, __, __, __,    "ja       %Jb"),
+  mkop(0x78, x86_jcc,    Jb,  __, __, __, __,    "js       %Jb"),
+  mkop(0x79, x86_jcc,    Jb,  __, __, __, __,    "jns      %Jb"),
+  mkop(0x7a, x86_jcc,    Jb,  __, __, __, __,    "jpe      %Jb"),
+  mkop(0x7b, x86_jcc,    Jb,  __, __, __, __,    "jpo      %Jb"),
+  mkop(0x7c, x86_jcc,    Jb,  __, __, __, __,    "jl       %Jb"),
+  mkop(0x7d, x86_jcc,    Jb,  __, __, __, __,    "jge      %Jb"),
+  mkop(0x7e, x86_jcc,    Jb,  __, __, __, __,    "jle      %Jb"),
+  mkop(0x7f, x86_jcc,    Jb,  __, __, __, __,    "jg       %Jb"),
 
   mkop(0x80, GRP1,       Eb,  Ib, __, __, GRP,   "%grp1    %Eb, %Ib"),
   mkop(0x81, GRP1,       Ev,  Iv, __, __, GRP,   "%grp1    %Ev, %Iv"),
@@ -2792,8 +2857,8 @@ constexpr opcode_t opix[] = {
   mkop(0xc1, GRP2,       Ev,  Ib, __, __, GRP,   "%grp2    %Ev, %Ib"),
   mkop(0xc2, x86_ret,    Iw,  __, __, 24, __,    "ret      %Iw"),
   mkop(0xc3, x86_ret,    __,  __, __, 20, __,    "ret"),
-  mkop(0xc4, x86_les,    rES, Gv, Mp, __, MRR,   "les      %Gv, %Mp"),
-  mkop(0xc5, x86_lds,    rDS, Gv, Mp, __, MRR,   "lds      %Gv, %Mp"),
+  mkop(0xc4, x86_ldseg,  rES, Gv, Mp, __, MRR,   "les      %Gv, %Mp"),
+  mkop(0xc5, x86_ldseg,  rDS, Gv, Mp, __, MRR,   "lds      %Gv, %Mp"),
   mkop(0xc6, x86_mov,    Eb,  Ib, __, __, MRR,   "mov      %Eb, %Ib"),
   mkop(0xc7, x86_mov,    Ev,  Iv, __, __, MRR,   "mov      %Ev, %Iv"),
   mkop(0xc8, x86_enter,  Iw,  Ib, __, __, __,    "enter    %Iw, %Ib"),
@@ -2824,14 +2889,14 @@ constexpr opcode_t opix[] = {
 
   mkop(0xe0, x86_loopnz, Jb,  __, __, __, __,    "loopnz   %Jb"),
   mkop(0xe1, x86_loopz,  Jb,  __, __, __, __,    "loopz    %Jb"),
-  mkop(0xe2, x86_loop,   Jb,  __, __, __, __,    "loop     %Jb"),
-  mkop(0xe3, x86_jcxz,   Jb,  __, __, __, __,    "jcxz     %Jb"),
+  mkop(0xe2, x86_loop,   Jb,  __, __, __, QSZ,   "loop     %Jb"),
+  mkop(0xe3, x86_jcxz,   Jb,  __, __, __, QSZ,   "jcxz     %Jb"),
   mkop(0xe4, x86_in,     rAL, Ib, __, 14, __,    "in       al, %Ib"),
   mkop(0xe5, x86_in,     rvAX,Ib, __, 14, __,    "in       %v0, %Ib"),
   mkop(0xe6, x86_out,    Ib,  rAL,__, 14, __,    "out      %Ib, al"),
   mkop(0xe7, x86_out,    Ib,  rvAX,__,14, __,    "out      %Ib, %v0"),
-  mkop(0xe8, x86_call,   Jv,  __, __, 23, __,    "call     %Jv"),
-  mkop(0xe9, x86_jmp,    Jv,  __, __, 15, __,    "jmp      %Jv"),
+  mkop(0xe8, x86_call,   Jv,  __, __, 23, QSZ,   "call     %Jv"),
+  mkop(0xe9, x86_jmp,    Jv,  __, __, 15, QSZ,   "jmp      %Jv"),
   mkop(0xea, x86_jmpf,   Ap,  __, __, 15, __,    "jmp      %Ap"),
   mkop(0xeb, x86_jmp,    Jb,  __, __, 15, __,    "jmp      %Jb"),
   mkop(0xec, x86_in,     rAL, rDX,__, 12, __,    "in       al, dx"),
@@ -3037,19 +3102,19 @@ static uint32_t x86_get(const arg_t& arg)
     return cpu_read8(mrr_base);
   case Mw:
   case Mp:
-    return cpu_read16(mrr_base);
+    return mem_read16(mrr_seg, mrr_base);
   case Xb:
     tmp = advstr(rvSI, 1);
     return cpu_read8(tmp);
   case Xw:
     tmp = advstr(rvSI, 2);
-    return cpu_read16(tmp);
+    return mem_read16(mrr_seg, tmp);
   case Yb:
     tmp = advstr(rvDI, 1);
     return cpu_read8(tmp);
   case Yw:
     tmp = advstr(rvDI, 2);
-    return cpu_read16(tmp);
+    return mem_read16(mrr_seg, tmp);
   case 0x00:
     break;
   default:
@@ -3086,7 +3151,7 @@ static void x86_set(const arg_t& arg, uint32_t v, bool setflags)
     cpu_write8(mrr_base, v);
     break;
   case Mw: // 16-bit memory
-    cpu_write16(mrr_base, v);
+    mem_write16(mrr_seg, mrr_base, v);
     break;
   case Yb: // 8-bit memory, string op
     tmp = advstr(rvDI, 1);
@@ -3094,7 +3159,7 @@ static void x86_set(const arg_t& arg, uint32_t v, bool setflags)
     break;
   case Yw: // 16-bit memory, string op
     tmp = advstr(rvDI, 2);
-    cpu_write16(tmp, v);
+    mem_write16(mrr_seg, tmp, v);
     break;
   case SIZE_BYTE:
   case SIZE_WORD:
@@ -3651,7 +3716,7 @@ static void x86_loadptr(arg_t seg, arg_t ofs)
  *  call:    r:arg0
  *  callf:
  */
-int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
+int cpu_exec(int op, int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
 {
   uint32_t tmp;
   uint16_t ncs;
@@ -3716,12 +3781,8 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
     cpu_pushv(PC);
     x86_setpc(true, ncs, tmp);
     break;
-  case 0x70 ... 0x7f: // jcc Jb (cycs = 16/4)
-    x86_setpc(x86_testcond(opfn), CS, x86_get(arg0));
-    if (x86_testcond(opfn))
-      extracyc = 12;
-    else
-      extracyc = 4;
+  case x86_jcc: // jcc Jb (cycs = 16/4)
+    x86_setpc(x86_testcond(op), CS, x86_get(arg0));
     break;
   case x86_jmp:  // jmp Jb/Jv/Ev
     x86_setpc(true, CS, x86_get(arg0));
@@ -3852,11 +3913,7 @@ int cpu_exec(int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
   case x86_lea: // lea
     x86_set(arg0, mrr_base - mrr_seg);
     break;
-  case x86_lds:
-  case x86_les:
-  case x86_lfs:
-  case x86_lgs:
-  case x86_lss:
+  case x86_ldseg:
     x86_loadptr(arg0, arg1);
     break;
   default:
@@ -4022,10 +4079,7 @@ int cpu_step()
   }
 
   /* Execute opcode */
-  if (opc.execfn) {
-    opc.execfn(&opc, arg0, arg1, arg2);
-  }
-  else if (cpu_exec(opc.opfn, arg0, arg1, arg2)) {
+  if (cpu_exec(op, opc.opfn, arg0, arg1, arg2)) {
     zprintf("%.2x %-6s %c%c%c %c%c%c  - unknown op\n",op, opc.mnem, cc(arg0), cc(arg1));
     assert(0);
   }
@@ -4173,7 +4227,7 @@ void dumpcfg(uint8_t *data, size_t size)
     nxt[0] = off;
     nxt[1] = -1;
     switch (opc.opfn) {
-    case x86_jo ... x86_jg:
+    case x86_jcc:
     case x86_loopnz:
     case x86_loopz:
     case x86_loop:
