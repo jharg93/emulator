@@ -156,6 +156,18 @@ found sig: off:00ff425a 00ff425a end:00ff4290  0 21  9  0 00ff43c4 00ff4274 extr
  *  Requests bus during odd cycles
  *  
  * Every other line is 228 clocks, 227 clocks
+ *
+ * DMA priority: disk, audio, <display, sprite>, copper(odd), blitter, cpu(even)
+ *  scan line: ~63 ms 227.5 color clocks, 280ns, 226 for devices
+ *   4 mem refresh
+ *   3 disk dma
+ *   4 audio dma (2 bytes per channel)
+ *   16 sprite (2 words per channel)
+ *   80 bitplane (even/odd)
+ *   226 - 107 = 119 slots for blitter, copper, cpu
+ * Copper move: 4 slots
+ * Copper wait: 6 slots
+ * https://eab.abime.net/showthread.php?t=72575
  */
 
 struct rect {
@@ -321,6 +333,7 @@ struct sprite_t {
   int x0, y0, y1;
   // number of lines remaining
   int count;
+  // plane data
   uint16_t p[4];
   int XPOS() const {
     return x0;
@@ -340,7 +353,7 @@ struct sprite_t {
 } sprites[8];
 
 // check if sprite is attached
-bool attached(int n) {
+constexpr bool attached(int n) {
   if ((n & 1) != 0 || n < 0 || n >= 8)
     return false;
   return ((sprites[n].pos == sprites[n+1].pos) &&
@@ -1275,7 +1288,7 @@ struct amiga : public bus_t, crtc_t, blitter_t {
   //
   // +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
   // |                               |  hpos=0x38                    | ddfstrt
-  // |                               |  lores=(DIWSTRT/2)-8.5        |
+  // |                               |  lores=(DIWSTRT/2)-8.5        | 0x38
   // |                               |  hires=(DIWSTRT/2)-4.5        |
   // +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
   // |                               |  hpos=0xd0                    | ddfstop
@@ -1488,13 +1501,14 @@ void blitter_t::showblt() {
 	 (int)sys->dmaconr & (DMA_BLTEN|DMA_BLTPRI|DMA_BZERO|DMA_BBUSY),
 	 sys->intenar & IRQ_BLIT);
   if (bltcon0 & 1) {
+    // line mode
   } else {
     printf("con0:%.4x ashift:%x a:%x b:%x c:%x d:%x func:%.2x\n",
 	   bc0, (bc0 >> 12),
 	   !!(bc0 & 0x800),!!(bc0 & 0x400),!!(bc0 & 0x200),!!(bc0 & 0x100),
 	   bc0 & 0xFF);
     printf("con1:%.4x bshift:%x efe:%x ife:%x fci:%x desc:%x\n",
-	   bc1, bc1 >> 12, !!(bc1 & 0x10), !!(bc1 & 0x08), !!(bc1 & 0x04));
+	   bc1, bc1 >> 12, !!(bc1 & 0x10), !!(bc1 & 0x08), !!(bc1 & 0x04), !!(bc1 & DESC));
   }
   printf("bltaptr: %.8x mod:%.4x dat:%.4x fwm:%.4x lwm:%.4x\n",
 	 (int)bltaptr, (int)bltamod, (int)bltadat,
@@ -1753,6 +1767,7 @@ void blitter_t::blt_line()
   
   auto incx = [&](int c, int l) {
     ashift += c ? -1 : 1;
+    // shift wrap
     if (ashift < 0) {
       ashift = 15;
       cmod -= 2;
@@ -1817,26 +1832,32 @@ void blitter_t::blt_line()
   blt_count -= 2;
 }
 
-auto lshift = [](uint16_t& hi, uint16_t lo, int s) {
-  uint16_t res = (hi >> (16-s)) | (lo << s);
-  hi = lo;
-  return res;
+auto blt_shift = [](uint16_t &prev, uint16_t curr, int shift, bool desc) {
+  const uint32_t p = prev;
+
+  prev = curr;
+  if (desc) {
+    return ((curr << 16) | p) >> (16 - shift);
+  }
+  return ((p << 16) | curr) >> shift;
  };
-auto rshift = [](uint16_t& hi, uint16_t lo, int s) {
-  uint16_t res = (hi << (16-s)) | (lo >> s);
-  hi = lo;
-  return res;
- };
+
+
 // bltamod = 4*(dy - dx)
 // bltbmod = 4*dy
 // bltcon0.ash = (x1 mod 15)
 // bltcon1.bsh = bit of texture
+
+// number of cycles, min = 4, max = 8
+//  A += 0
+//  B += 2
+//  C or D += 0
+//  C and D += 2
+// line mode: each pixel = 8 ticks
+//   (n*H*W)/7.16 NTSC
+//   (n*H*W)/7.09 PAL
 bool blitter_t::blt_tick()
 {
-  uint16_t a, b, c;
-  int ashift, bshift;
-  int delta = 2;
-
   // don't run if no blitter dma
   if (blt_count == 0)
     return false;
@@ -1845,12 +1866,10 @@ bool blitter_t::blt_tick()
     blt_line();
     return false;
   }
-  ashift = (bltcon0 >> 12) & 0xF;
-  bshift = (bltcon1 >> 12) & 0xF;
-  if (bltcon1 & DESC) {
-    /* Descending address */
-    delta = -delta;
-  }
+  bool desc = (bltcon1 & DESC) != 0;
+  auto ashift = (bltcon0 >> 12) & 0xF;
+  auto bshift = (bltcon1 >> 12) & 0xF;
+  auto delta = (desc ? -2 : 2);
 
   /* Read in source values */
   if (bltcon0 & USE_A)
@@ -1860,23 +1879,15 @@ bool blitter_t::blt_tick()
   if (bltcon0 & USE_C)
     bltcdat = blt_read('c', bltcptr, delta);
 
-  a = bltadat;
-  b = bltbdat;
-  c = bltcdat;
+  uint16_t a = bltadat;
+  uint16_t b = bltbdat;
+  uint16_t c = bltcdat;
   if (lcnt == 0)
     a &= bltafwm;
   if (lcnt == (blt_width-1))
     a &= bltalwm;
-  //auto tmpa = a;
-  if (bltcon1 & DESC) {
-    a = lshift(prev_a, a, ashift);
-    b = lshift(prev_b, b, bshift);
-  } else {
-    a = rshift(prev_a, a, ashift);
-    b = rshift(prev_b, b, bshift);
-  }
-  //prev_a = tmpa;
-  //prev_b = bltbdat;
+  a = blt_shift(prev_a, a, ashift, desc);
+  b = blt_shift(prev_b, b, bshift, desc);
   
   /* Calculate result and write out */
   bltddat = bltfn(bltcon0, a, b, c);
@@ -1927,6 +1938,11 @@ bool blitter_t::blt_tick()
  */
 void showcop(uint32_t pc, const char *lbl);
 
+// DMA priority
+//  memory refresh(4)
+//  disk(3), audio(4), sprite(16), display(80): display > sprite for 0x30 ddfstrt
+//  copper
+//  blitter, 68000(even)
 enum DmaCycle {
   Even,Odd,Dram,Disk,
 
@@ -2185,12 +2201,14 @@ int amiga::diskdma() {
   return Odd;
 }
 
+// Do dma transaction, read from xxxPTL to xxxDAT, if mask enabled
 int amiga::rxdma(ioreg16 dat, ioreg32 ptr, int dmamask, const char *lbl) {
   if (!dma_enabled(dmamask)) {
     return -1;
   }
   uint32_t addr = ptr;
   if (ptr != 0) {
+    // read data
     dat = blt_read('p', ptr, 2);
   }
   //printf("%.4x %.4x[%.4x] rxdma:%.8x=%.4x[%s]\n", vPos, hPos, (int)ddfstrt, addr, (int)dat, lbl); 
@@ -2207,7 +2225,7 @@ void amiga::renderbg(int y, int count, int dmapos)
 
   /* Find x pos since data start */
   bx = dmapos * 16;
-  printf("Render: %.2x %.2x-%.2x [%.2x] %d\n", hPos, (int)ddfstrt, (int)ddfstop, (hPos - ddfstrt), bx); 
+  printf("Render: %.2x %.2x-%.2x pf2shift:%d pf1shift:%d\n", hPos, (int)ddfstrt, (int)ddfstop, (int)(bplcon1 >> 4) & 0xF, (int)(bplcon1 >> 0) & 0xF);
 
   // build line
   assert(count*16 < 640);
@@ -2227,6 +2245,7 @@ void amiga::renderbg(int y, int count, int dmapos)
 
 int amiga::bpdma(int mode) {
   if (vPos >= screen.y0 && vPos < screen.y1) {
+    // if we're within screen boundary
     if (mode == bpl1 || mode == bpl1h) {
       if (totdma++ > wdma) {
 	return Even;
@@ -2274,6 +2293,7 @@ void amiga::renderspr(int y, int n, int mode, uint32_t *palette)
   uint16_t *pd;
   
   if (y < s->y0 || y >= s->y1) {
+    // if scanline outside of sprite, exit
     return;
   }
   pd = spraddr(n);
@@ -2397,12 +2417,14 @@ bool amiga::vid_tick()
   if (hPos == 0) {
     ndma = (ddfstop - ddfstrt);
     if (bplcon0 & 0x8000) {
-      wdma = (ndma / 4) + 1 + ddelta;
+      // hires
+      wdma = (ndma / 4) + 2 + ddelta;
     }
     else {
-      // ick??
-      wdma = (ndma / 8) + ddelta;
+      // lowres
+      wdma = (ndma / 8) + 1 + ddelta;
     }
+    printf("wdma: %3d %d\n", vPos, wdma);
   }
   coppc = runcop(coppc, hPos, vPos);
   dodma(hPos);
@@ -2412,13 +2434,11 @@ bool amiga::vid_tick()
     // end-of-frame
     static int old_x, old_y;
 
-    if (scr->KeyState['q'])  {
+    if (scr->key('q', true))  {
       ddelta--;
-      scr->KeyState['q']=false;
     }
-    if (scr->KeyState['w']) {
+    if (scr->key('w', true)) {
       ddelta++;
-      scr->KeyState['w']=false;
     }
     if (scr->key(Key::K_F1)) {
       static int inserted;
@@ -2599,12 +2619,17 @@ void amiga::chip_write(uint32_t addr, uint32_t val, int n)
 	   (bplcon0 & 0x8000)?"hires":"lores");
     break;
   case BPLCON1:
+    // PF2H3-0
+    // PF1H3-0
     printf("%4d bplcon1: pf2:%x pf1:%x\n",
 	   vPos,
 	   ((val >> 4) & 0xf),
 	   ((val >> 0) & 0xf));
     break;
   case BPLCON2:
+    // PF2PRI
+    // PF2P2-0
+    // PF1P2-0
     printf("%4d bplcon2: pf2:%d spr:%x %x\n",
 	   vPos,
 	   (val >> 6) & 1,
@@ -2612,27 +2637,38 @@ void amiga::chip_write(uint32_t addr, uint32_t val, int n)
 	   (val >> 0) & 7);
     break;
   case DIWSTRT:
-    /* Get UL screen dimensions */
+    /* Get UL screen dimensions
+     * H8=0
+     * V8=0
+     * NTSC: 2c81
+     * PAL:  2c81
+     */
     screen.x0 = (diwstrt & 0xff);
     screen.y0 = (diwstrt >> 8);
-    printf("screen: %d, %d\n", screen.x0, screen.y0);
+    printf("screen: %d, %d %.4x\n", screen.x0, screen.y0, val);
     break;
   case DIWSTOP:
     /* Get LR screen dimensions
-     * X is always + 256
-     * Y is +256 if < 128  (128..255.000..127 -> 256..384)
+     * H8 = 1
+     * V8 != V7
+     * NTSC: f4c1
+     * PAL:  2cc1
      */
     screen.x1 = 256 + (diwstrt & 0xff);
     screen.y1 = (diwstrt >> 8);
     if ((screen.y1 & 0x80) == 0)
       screen.y1 += 256;
-    printf("screen res: %d,%d\n", screen.x1, screen.y1);
+    printf("screen res: %d,%d %.4x\n", screen.x1, screen.y1, val);
     break;
   case DDFSTRT:
-    /* Fetch start, horiz */
+    /* Fetch start, horiz
+     * 38
+     */
     printf("ddfstrt: %.4x\n", val);
     break;
   case DDFSTOP:
+    /* D0
+     */
     printf("ddfstop: %.4x\n", val);
     break;
   case COPJMP1:
@@ -2747,6 +2783,7 @@ static void *buswrite(uint32_t addr, uint32_t val, int size)
   return NULL;
 }
 
+// run copperlist for 1 cycle
 uint32_t amiga::runcop(uint32_t pc, int hpos, int vpos)
 {
   uint16_t cpos, code0, code1, waitpos;
@@ -2755,6 +2792,7 @@ uint32_t amiga::runcop(uint32_t pc, int hpos, int vpos)
   if (!dma_enabled(DMA_COPEN)) {
     return pc;
   }
+  // no pc
   if (!pc || pc == -1) {
     return pc;
   }
@@ -2766,12 +2804,8 @@ uint32_t amiga::runcop(uint32_t pc, int hpos, int vpos)
   cpos = (vpos << 8) + hpos;
   code0 = cpu_read16(pc + 0);
   code1 = cpu_read16(pc + 2);
+  // MOVE
   if ((code0 & 1) == 0) {
-#if 0
-    uint32_t cr = code0 + 0xdff000;
-    printf("%.4x %.4x/%.4x copper move: %.8x[%s] = %.4x\n",
-	   cpos, code0, code1, cr, iorname(cr), code1);
-#endif
     if (code0 >= 0 && code0 <= 0x1FF) {
       chip_write(0xDFF000 + code0, code1, 2);
     }
@@ -2783,9 +2817,9 @@ uint32_t amiga::runcop(uint32_t pc, int hpos, int vpos)
     }
     return pc + 4;
   }
+  // WAIT or SKIP
   waitpos = (code0 & code1) & 0xfffe;
   if (cpos >= waitpos) {
-    //printf("%.4x/%.4x copper skip or wait\n", cpos, waitpos);
     pc += (code1 & 1) ? 8 : 4;
   }
   return pc;
@@ -2859,16 +2893,14 @@ void amiga::drawframe()
     scr->scrrect(10 + (i * 6), h + 25, 5, 5, cpal[i]);
   }
 
-  int ds, de;
   int count;
-  
-  ds = R16(DDFSTRT);
-  de = R16(DDFSTOP);
+  int ds = ddfstrt;
+  int de = ddfstop;
   
   count = de - ds;
   if (bplcon0 & D15) {
     // hires
-    count = (count / 4) + 1;
+    count = (count / 4) + 2;
   }
   else {
     count = (count / 8) + 1;
@@ -2877,8 +2909,11 @@ void amiga::drawframe()
   fps = (float)frame / (now - fpstime);
   scr->scrtext(0, h + 32, WHITE, "(%d,%d)-(%d,%d) %.2x:%.2x %2d %dx%dx%d",
 	       screen.x0, screen.y0, screen.x1, screen.y1, ds, de, count,
-	       count * 16, screen.y1 - screen.y0, 1L << bpu);
-  scr->scrtext(0, h + 40, WHITE, "frame:%d fps:%.2f wdma:%d", frame, fps, wdma);
+	       count * 16, screen.y1 - screen.y0, bpu);
+  scr->scrtext(0, h + 40, WHITE, "frame:%d fps:%.2f wdma:%d sh:[%x %x] dly[%x %x]",
+	       frame, fps, wdma,
+	       bltcon0 >> 12, bltcon1 >> 12,
+	       (bplcon1 >> 3) & 7, bplcon1 & 7);
 #if 0
   draw_gradient(scr, 180, 250, 0xFF0000,
 		100,0, 0x0000FF,
@@ -3146,7 +3181,7 @@ int main(int argc, char *argv[])
   }
   
   // https://github.com/nicodex/amiga-ocs-cpubltro/blob/main/cpubltro.asm
-  thegame.init("roms/de-amiga-os-204.rom");
+  thegame.init("roms/de-amiga-os-120.rom");
   //thegame.init("cpubltro-0f8.rom");
   //thegame.init("emutos-amiga-rom-1.3//emutos-amiga.rom");
   //thegame.init("DiagROM/16bit.bin");
