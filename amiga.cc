@@ -1409,7 +1409,7 @@ static const char *ciareg[] = {
 
 void cia8250::show(const char *pfx) {
   printf("%-6s cia%c: pa:%.2x pb:%.2x da:%.2x db:%.2x ta:%.4x/%.8x tb:%.4x/%.8x tod:%.6x alrm:%.6x sdr:%.2x icr:%.2x[%.2x/%.2x] cra:%.2x crb:%.2x\n",
-	 pfx, id, pra, prb, ddra, ddrb, tmra_freq, tmra.count, tmrb_freq,
+	 pfx, id, pra, prb, ddra, ddrb, tlatch(TALO), tmra.count, tlatch(TBLO),
 	 tmrb.count, getTod(), getTod(1), sdr, icr, cia_irq.en, cia_irq.sts, cra, crb);
 };
 
@@ -2654,8 +2654,8 @@ void amiga::chip_write(uint32_t addr, uint32_t val, int n)
      * NTSC: f4c1
      * PAL:  2cc1
      */
-    screen.x1 = 256 + (diwstrt & 0xff);
-    screen.y1 = (diwstrt >> 8);
+    screen.x1 = 256 + (diwstop & 0xff);
+    screen.y1 = (diwstop >> 8);
     if ((screen.y1 & 0x80) == 0)
       screen.y1 += 256;
     printf("screen res: %d,%d %.4x\n", screen.x1, screen.y1, val);
@@ -3032,14 +3032,14 @@ bool cia_tick(cia8250 *c)
     printf("\n");
   }
   if (c->tmra.tick()) {
-    printf("ticka fired : %.4x bmode:%d\n", c->tmra_freq, (c->crb >> 5) & 3);
+    printf("ticka fired : %.4x bmode:%d\n", c->tlatch(TALO), (c->crb >> 5) & 3);
     if (c->cia_irq.set(0x01)) {
       printf("ticka irq\n");
     }
     cret = true;
   }
   if (c->tmrb.tick()) {
-    printf("tickb fired : %.4x\n", c->tmrb_freq);
+    printf("tickb fired : %.4x\n", c->tlatch(TBLO));
     if (c->cia_irq.set(0x02)) {
       printf("tickb irq\n");
     }
