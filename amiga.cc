@@ -1300,7 +1300,7 @@ struct amiga : public bus_t, crtc_t, blitter_t {
   IOREG16(diwstop, DIWSTOP);
   IOREG16(ddfstrt, DDFSTRT); // DMA start
   IOREG16(ddfstop, DDFSTOP); // DMA stop
-  IOREG16(vposr,   VPOSR);
+  IOREG16(vposr,   VPOSR);   //
   IOREG16(vhposr,  VHPOSR);
   IOREG16(intenar, INTENAR); // interrupt enabled
   IOREG16(intreqr, INTREQR); // interrupt request
@@ -2201,17 +2201,15 @@ int amiga::diskdma() {
   return Odd;
 }
 
-// Do dma transaction, read from xxxPTL to xxxDAT, if mask enabled
+// if dma enabled, read from xxxPTL to xxxDAT
 int amiga::rxdma(ioreg16 dat, ioreg32 ptr, int dmamask, const char *lbl) {
   if (!dma_enabled(dmamask)) {
     return -1;
   }
-  uint32_t addr = ptr;
   if (ptr != 0) {
     // read data
     dat = blt_read('p', ptr, 2);
   }
-  //printf("%.4x %.4x[%.4x] rxdma:%.8x=%.4x[%s]\n", vPos, hPos, (int)ddfstrt, addr, (int)dat, lbl); 
   return 0;
 }
 
@@ -2225,7 +2223,10 @@ void amiga::renderbg(int y, int count, int dmapos)
 
   /* Find x pos since data start */
   bx = dmapos * 16;
-  printf("Render: %.2x %.2x-%.2x pf2shift:%d pf1shift:%d\n", hPos, (int)ddfstrt, (int)ddfstop, (int)(bplcon1 >> 4) & 0xF, (int)(bplcon1 >> 0) & 0xF);
+  printf("Render: %.2x %.2x-%.2x pf2shift:%d pf1shift:%d\n",
+	 hPos, (int)ddfstrt, (int)ddfstop,
+	 (int)(bplcon1 >> 4) & 0xF,
+	 (int)(bplcon1 >> 0) & 0xF);
 
   // build line
   assert(count*16 < 640);
@@ -2308,6 +2309,8 @@ void amiga::renderspr(int y, int n, int mode, uint32_t *palette)
   }
 }
 
+// Collision bits
+// | n/a |S4/S6|S2/S6|S2/S4|S0/S6 | S0/S4 | S0/S2|||P2/S6 | P2/S4 | P2/S2 | P2/S0|||P1/S6 | 
 int amiga::check_collide() {
   int coll = 0;
   auto cxbit = [&](int cond, int bit, const char *msg) {
@@ -2411,7 +2414,11 @@ bool amiga::vid_tick()
   bool rc = false;
   int ndma;
 
-  vposr = 0x1000 | (vPos >> 8);
+  // 8636: NTSC 10
+  // 8367: PAL  00
+  // 8370: FAT NTSC 10
+  // 8371: FAT PAL  00
+  vposr  = 0x1000 | (vPos >> 8);
   vhposr = (vPos << 8) | hPos;
 
   if (hPos == 0) {
@@ -2422,7 +2429,7 @@ bool amiga::vid_tick()
     }
     else {
       // lowres
-      wdma = (ndma / 8) + 1 + ddelta;
+      wdma = (ndma / 8) + ddelta;
     }
     printf("wdma: %3d %d\n", vPos, wdma);
   }
@@ -2915,9 +2922,9 @@ void amiga::drawframe()
 	       bltcon0 >> 12, bltcon1 >> 12,
 	       (bplcon1 >> 3) & 7, bplcon1 & 7);
 #if 0
-  draw_gradient(scr, 180, 250, 0xFF0000,
-		100,0, 0x0000FF,
-		200, 125, 0x00FF00);
+  draw_gradient(scr, 180, 250, 0xFF00FF,
+		100,0, 0x00FFFF,
+		200, 125, 0xFFFF00);
 #endif
   scr->draw();
   scr->clear();
@@ -3175,13 +3182,13 @@ int main(int argc, char *argv[])
   gentbl();
   setbuf(stdout, NULL);
 
-  floppyLoad(0, "original5.ADF");
+  floppyLoad(0, "original2.adf");
   for (int i=1; i < argc; i++) {
     floppyLoad(i, argv[i]);
   }
   
   // https://github.com/nicodex/amiga-ocs-cpubltro/blob/main/cpubltro.asm
-  thegame.init("roms/de-amiga-os-120.rom");
+  thegame.init("roms/de-amiga-os-204.rom");
   //thegame.init("cpubltro-0f8.rom");
   //thegame.init("emutos-amiga-rom-1.3//emutos-amiga.rom");
   //thegame.init("DiagROM/16bit.bin");
