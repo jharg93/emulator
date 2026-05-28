@@ -36,12 +36,16 @@
 #include "bus.h"
 #include "audio.h"
 #include "c64.h"
+#include "crtc.h"
 
 extern int SPC;
 extern int trace;
 extern bool hlt;
 
 enum {
+  CIA_IRQ_TMRA = 0x1,
+  CIA_IRQ_TMRB = 0x2,
+  
   CIA1_IRQ_TMRA = 0x1,
   CIA1_IRQ_TMRB = 0x2,
   CIA1_IRQ_TOD  = 0x4,
@@ -69,107 +73,6 @@ enum {
  * 0050 Start address
  */
 
-/* Memory map
- * 0001-0001 Memory Map config
- * 0400-07FF Screen Memory 1000 bytes   (40x25)
- * D800-DBE7 Color RAM     1000 nybbles (40x25) ----cccc
- *
- * 8000-9FFF RAM CARTLO
- * A000-BFFF RAM CARTHI   BASIC
- * C000-CFFF RAM
- * D000-DFFF RAM CHARROM  IO
- * E000-FFFF RAM CARTHI   KERNAL
- *
- * -------- VIC registers
- * D000 SPRITE_X
- * D001 SPRITE_Y
- * ....
- * D010 SPRITE_X8             |M7X8|M6X8|M6X8|M6X8|M6X8|M6X8|M6X8|M6X8|
- * D011 CTRL1                 |RST8|ECM |BMM |DEN |RSEL|YSCROLL       |
- * D012 RASTER                |RST7|RST6|RST5|RST4|RST3|RST2|RST1|RST0|
- * D013 LIGHTPEN_X
- * D014 LIGHTPEN_Y
- * D015 SPRITE_EN             |M7E |M7E |M7E |M7E |M7E |M7E |M7E |M7E |
- * D016 CTRL2                 |    |    |RES |MCM |CSEL|XSCROLL       |
- * D017 SPRITE_Y2
- * D018 MEMPTR                |VM13|VM12|VM11|VM10|CB13|CB12|CB11|    |
- * D019 INTSTS                |EVT |              |LP  |SSCL|SBCL|RSTR|
- * D01A INTEN
- * D01B SPRITE_PRI
- * D01C SPRITE_MC
- * D01D SPRITE_X2
- * D01E SPRITE_SPR_COLL      Sprite-sprite collision
- * D01F SPRITE_BG_COLL       Sprite-background collision
- * D020 BORDER_CLR           ----cccc
- * D021 BG0_CLR              ----cccc
- * D022 BG1_CLR              ----cccc
- * D023 BG2_CLR              ----cccc
- * D024 BG3_CLR              ----cccc
- * D025 SPRITE_MM0           ----cccc
- * D026 SPRITE_MM1           ----cccc
- * D027 SPRITE_CLR 0
- * D028 SPRITE_CLR 1
- * D029 SPRITE_CLR 2
- * D02A SPRITE_CLR 3
- * D02B SPRITE_CLR 4
- * D02C SPRITE_CLR 5
- * D02D SPRITE_CLR 6
- * D02E SPRITE_CLR 7
- * D02F ... unusable
- *
- * D040-D3FF mirror
- *
- * SID
- * ---- Voice 1
- * D400 Freq Lo               ffffffff
- * D401 Freq Hi               ffffffff
- * D402 Duty Lo               dddddddd
- * D403 Duty Hi               ----dddd
- * D404 Control               npstTRSG
- * D405 Attack/decay          aaaadddd
- * D406 Sustain/release       ssssrrrr
- * ---- Voice 2
- * D407 Freq Lo               ffffffff
- * D408 Freq Hi               ffffffff
- * D409 Duty Lo               dddddddd
- * D40a Duty Hi               ----dddd
- * D40b Control               npstTRSG
- * D40c Attack/decay          aaaadddd
- * D40d Sustain/release       ssssrrrr
- * ---- Voice 3
- * D40e Freq Lo               ffffffff
- * D40f Freq Hi               ffffffff
- * D410 Duty Lo               dddddddd
- * D411 Duty Hi               ----dddd
- * D412 Control               npstTRSG
- * D413 Attack/decay          aaaadddd
- * D414 Sustain/release       ssssrrrr
- * D500..D7FF mirrored
- */
-
-/* VIC memory map. Select=CIA2.0x0A[0:1]
- * ---- Bank 0
- * 0000-0FFF RAM
- * 1000-1FFF Char ROM
- * 2000-2FFF RAM
- * 3000-3FFF RAM
- * ---- Bank 1
- * 4000-4FFF RAM
- * 5000-5FFF RAM
- * 6000-6FFF RAM
- * 7000-7FFF RAM
- * ---- Bank 2
- * 8000-8FFF RAM
- * 9000-9FFF Char ROM
- * A000-AFFF RAM
- * B000-BFFF RAM
- * ---- Bank 3
- * C000-CFFF RAM
- * D000-DFFF RAM
- * E000-EFFF RAM
- * F000-FFFF RAM
- */
-
 #define EX 40
 int EY=52;
 int SPRY=0;
@@ -193,6 +96,7 @@ enum {
   BMM = 0x20,
   MCM = 0x10,
 };
+
 /* Sprites 24x21
  *  Mem Pointer @ 0800..0807
  *  Sprite Data:  SPRITE_PTR[n] * 64
@@ -204,6 +108,152 @@ extern uint64_t totcyc;
 
 #define RASTER scanline
 
+static constexpr int sector_size = 256;
+
+struct d64TrackOffset {
+  int base[41] = {};
+  int operator[](int n) const {
+    return base[n];
+  };
+};
+
+constexpr auto mktrackoff() {
+  d64TrackOffset track{};
+  int off = 0;
+  
+  for (int i = 1; i < 41; i++) {
+    track.base[i] = off * sector_size;
+    if      (i <= 17)  off += 21;
+    else if (i <= 24)  off += 19;
+    else if (i <= 30)  off += 18;
+    else               off += 17;
+  }
+  return track;
+};
+    
+static constexpr auto track_offset = mktrackoff();
+
+static wchar_t pski1[96] =
+  L" !\"#$%^\'()*+,-./"
+  "0123456789:;<=>?"
+  "@ABCDEFGHIJKLMNO"
+  "PQRSTUVWXYZ[£]↑←"
+  ;
+
+// http://unusedino.de/ec64/technical/formats/d64.html
+struct d64file {
+  uint8_t  d_track;   // 00h
+  uint8_t  d_sector;  // 01h
+  uint8_t  type;      // 02h
+  uint8_t  f_track;   // 03h
+  uint8_t  f_sector;  // 04h
+  uint8_t  name[16];  // 05h
+  uint8_t  r_track;   // 15h
+  uint8_t  r_sector;  // 16h
+  uint8_t  r_len;     // 17h
+  uint8_t  rsvd[6];   // 18h
+  uint8_t  sz_lo;     // 1Eh
+  uint8_t  sz_hi;     // 1Fh
+  wchar_t petascii(char ch) {
+    if (ch < 0x20) return '?';
+    if (ch < 0x5f) return pski1[ch - 0x20];
+    return '?';
+  };
+  const wchar_t *getname() const {
+    static wchar_t s[32];
+    for (int i = 0; i < 16; i++) {
+      if (name[i] == 0xA0)
+	break;
+      if (name[i] >= 'Z') {
+	s[i] = '_';
+      } else {
+	s[i] = name[i];
+      }
+    }
+    return s;
+  };
+};
+
+struct d64 {
+  uint8_t *data;
+  size_t   size;
+
+  std::vector<d64file *> files;
+  d64(const char *file) {
+    data = loadrom(file, size);
+    lsdir();
+  };
+  auto load_prg(d64file *f) {
+    std::vector<uint8_t> fd;
+    int track = f->f_track;
+    int sector = f->f_sector;
+    while (track) {
+      printf("load_prg: %.2x %.2x\n", track, sector);
+      auto  sec = get_sector(track, sector);
+      hexdump(sec, 16);
+
+      // next pointer:
+      //   track == 0, sector is remaining bytes
+      //   track > 0,  254 bytes
+      track = sec[0];
+      sector = sec[1];
+      int bytes = (track == 0) ? sector : 254;
+      fd.insert(fd.end(), sec + 2, sec + 2 + bytes);
+    }
+    return fd;
+  }
+  void lsdir() {
+    int track = 18;
+    int sector = 1;
+    int id = 0;
+    const char *ftype[16] = { "del","seq","prg","usr","rel"};
+    while (track) {
+      d64file *f = (d64file *)get_sector(track, sector);
+      track = f[0].d_track;
+      sector = f[0].d_sector;
+      printf("------\n");
+      for (int i = 0; i < 8; i++) {
+	int ft = f[i].type & 0xF;
+	printf("%.2x %.2x|%.2x %.2x %.2x|[%s]%ls\n",
+	       f[i].d_track, f[i].d_sector,
+	       f[i].type,f[i].f_track, f[i].f_sector,
+	       ftype[ft],f[i].getname());
+	if (ft == 0x2) {
+	  files.push_back(&f[i]);
+	}
+#if 1
+	if (ft == 2) {
+	  char sn[32];
+	  snprintf(sn, sizeof(sn), "file%d.prg", id++);
+
+	  auto df = load_prg(&f[i]);
+	  FILE *fp = fopen(sn, "w+");
+	  fwrite(df.data(), 1, df.size(), fp);
+	  fclose(fp);
+	}
+#endif
+	if (f[i].type & 0x80) {
+	  // deleted
+	  continue;
+	}
+      }
+    }
+  };
+  const uint8_t *get_sector(int track, int sector) const {
+    assert(track >= 1 && track <= 40);
+    
+    int off = track_offset[track] + (sector * sector_size);
+    if (off + sector_size > size) {
+      assert(0);
+      return NULL;
+    }
+    return &data[off];
+  };
+};
+
+d64 *dsk = NULL;
+
+int showsli;
 int sli[512];
 
 volatile uint16_t& ioreg16(int n);
@@ -270,6 +320,15 @@ const char *comment(int addr) {
  * EXROM/GAME, from CRT header, default = 11
  * CHAREN,HIRAM,LOROM = ram[0x01] bits 2-0, default = 111
  */
+
+// see https://www.c64-wiki.com/wiki/Bank_Switching
+// 0000-0FFF : ram
+// 1000-7FFF : ram*
+// 8000-9FFF : ram,romlo
+// A000-BFFF : ram,basic,romhi
+// C000-CFFF : ram*
+// D000-DFFF : ram,io,char,
+// E000-FFFF : ram,kernel,carthi
 struct bmap_t {
   uint8_t bank8, bankA, bankD, bankE;
 } bankmap[] = {
@@ -308,7 +367,7 @@ struct bmap_t {
   { RAM,   RAM,   RAM,   RAM },
   { RAM,   RAM,   IOR,   RAM },
   { RAM,   RAM,   IOR,   KERNAL },
-  { RAM,   BASIC, IOR,   KERNAL },   // default
+  { RAM,   BASIC, IOR,   KERNAL },   // 11.111 default
 };
 
 struct c64;
@@ -344,12 +403,29 @@ struct cia64_t : public cia_t {
     regs = r;
     cia_irq.name = name;
   };
+  void tick() {
+    bool ta = tmra.tick();
+    bool tb = false;
+
+    switch ((regs[CRB] >> 5) & 3) {
+    case 0b00: tb = tmrb.tick(); break;
+    case 0b01: assert(0); break;
+    case 0b10: if (ta) tb = tmrb.tick(); break;
+    case 0b11: assert(0);
+    }
+    if (ta)
+      cia_irq.set(CIA_IRQ_TMRA);
+    if (tb)
+      cia_irq.set(CIA_IRQ_TMRB);
+  };
 };
 
 void cia64_t::Setreg(c64 *c, int n, uint8_t val) {
   assert(n <= 0xF);
   cia_t::setreg(n, val);
-  if (n == PRA && id == 2) {
+
+  printf("cia%d.set %x = %.2x\n", id, n, val);
+  if (id == 2 && n == PRA) {
       setvicbase(c, val);
       serialio(val, false);
   };
@@ -358,10 +434,11 @@ void cia64_t::Setreg(c64 *c, int n, uint8_t val) {
 uint8_t cia64_t::Getreg(c64 *c, int n) {
   assert(n <= 0xF);
   uint8_t val = cia_t::getreg(n);
-  if (n == PRA && id == 2) {
+  printf("cia%d.get %x = %.2x\n", id, n, val);
+  if (id == 2 && n == PRA) {
     serialio(val, true);
   }
-  if (n == PRB && id == 1) {
+  if (id == 1 && n == PRB) {
     val = getkp(c);
   }
   return val;
@@ -379,6 +456,12 @@ struct sprite_t {
   int      clr[4];
 
   bool     load(c64 *c, int n, int y);
+
+  int XPOS()   const { return sx; };
+  int YPOS()   const { return sy; };
+  int HEIGHT() const { return 21; };
+  int WIDTH()  const { return 24; };
+  int PRI()    const { return pri; };
 };
 
 struct c64 : public bus_t {
@@ -455,9 +538,11 @@ struct c64 : public bus_t {
   IOREG8(border_clr, 0xD020); // 53280 ----cccc  Border color
   IOPTR8(bg_clr,     0xD021); // 53281 ----cccc  Background 0-3 color
   
-  IOREG8(ctrl1,      0xD011);
-  IOREG8(ctrl2,      0xD016);
+  IOREG8(ctrl1,      0xD011); // 53265 rebshyyy
+  IOREG8(ctrl2,      0xD016); // 53270 ---mwxxx
 
+  // 53272 ssssccc-  screen_ram = ssss x 1k, charset = ccc x 2048
+  // 53272 ssssc---  screen_ram = ssss x 1k, charset = 0000 or 2000
   IOREG8(memptr,     0xD018);
   
   /* CIA1 */
@@ -486,13 +571,21 @@ struct c64 : public bus_t {
   
   void drawframe();
   int  scrmode();
-  
-  int YSCROLL() {
+
+  // Get X/Y scroll
+  int YSCROLL() const {
     return ctrl1 & 7;
   }
-  int XSCROLL() {
+  int XSCROLL() const {
     return ctrl2 & 7;
   }
+  int COLS() const {
+    return ctrl2 & 0x8 ? 40 : 38;
+  };
+  int ROWS() const {
+    return ctrl1 & 0x8 ? 25 : 24;
+  };
+  
   bool is_badline(int n) {
     int ys = 0;
     return (n >= 0x30 && n <= 0xf7 && ((n & 7) == ys));
@@ -578,11 +671,19 @@ const char petscii[] =
   "0123456789:;<=>?";
 #endif
 
+// CPU DDR Port
+// ..cccmmm
+// c = cassette
+// m = bank map
 void setmapreg(c64 *c, uint8_t val)
 {
   int bm = c->exgame + (val & 7);
 
+  c->ram[0x01] = val;
   if (c->mapreg != val) {
+    if ((val & 0b001000) == 0) {
+      c->cia1.cia_irq.set(CIA1_IRQ_DATASETTE);
+    }
     c->mapreg = val;
     c->bmap   = bankmap[bm];
     printf("%.4x Set Mapreg: %.2x [%s,%s,%s,%s]\n",
@@ -598,9 +699,11 @@ int zpgio(void *arg, uint32_t offset, const int mode, iodata_t& val) {
   c64 *c = (c64 *)arg;
 
   memio(c->ram, offset, mode, val);
+  if (offset == 0x00 && mode == 'w') {
+    printf("WRITE PORT 0: %.2x\n", val);
+  }
   if (offset == 0x01 && mode == 'w') {
     setmapreg(c, val);
-    
   }
   if (offset == 0x02) {
     if (c->prg && mode == 'w' && val == 3) {
@@ -733,7 +836,23 @@ int rdfreq(int port)
 /* DC00: r  pra
  * DC01: r  prb
  * DC02: r  ddra     gpio direction (0=ro, 1=rw)
+ *   bit 0: out  keyboard column 0/Joy2up
+ *   bit 1: out  keyboard column 1/Joy2down
+ *   bit 2: out  keyboard column 2/Joy2left
+ *   bit 3: out  keyboard column 3/Joy2right
+ *   bit 4: out  keyboard column 4/Joy2fire
+ *   bit 5: out  keyboard column 5
+ *   bit 6: out  keyboard column 6
+ *   bit 7: out  keyboard column 7
  * DC03: r  ddrb     gpio direction (0=ro, 1=rw)
+ *   bit 0: in  keyboard row 0/Joy1up
+ *   bit 1: in  keyboard row 1/Joy1down
+ *   bit 2: in  keyboard row 2/Joy1left
+ *   bit 3: in  keyboard row 3/Joy1right
+ *   bit 4: in  keyboard row 4/Joy1fire
+ *   bit 5: in  keyboard row 5
+ *   bit 6: in  keyboard row 6/timer a underflow
+ *   bit 7: in  keyboard row 7/timer b underflow
  * DC04: rw talo     
  * DC05: rw tahi
  * DC06: rw tblo
@@ -807,7 +926,23 @@ void serialio(uint8_t& val, bool read)
 /* DD00: r  pra
  * DD01: r  prb
  * DD02: r  ddra     gpio direction (0=ro, 1=rw)
+ *   bit 0: out  vic bank select bit 0 [0000-3FFF,4000-7FFF,8000-BFFF,C000-FFFF]
+ *   bit 1: out  vic bank select bit 1
+ *   bit 2: out  serial txd
+ *   bit 3: in   serial atn in
+ *   bit 4: out  serial atn out
+ *   bit 5: out  serial clk out
+ *   bit 6: io   serial clk in
+ *   bit 7: io   serial data io
  * DD03: r  ddrb     gpio direction (0=ro, 1=rw)
+ *   bit 0: in   serial rxd
+ *   bit 1: in   serial rts
+ *   bit 2: in   serial dtr
+ *   bit 3: in   serial ri
+ *   bit 4: in   serial dcd
+ *   bit 5: -    user port/reset
+ *   bit 6: out  serial cts
+ *   bit 7: out  serial dsr
  * DD04: rw talo     
  * DD05: rw tahi
  * DD06: rw tblo
@@ -876,25 +1011,25 @@ enum {
   RELEASE
 };
 
-int sid_attack(c64 *c, int base) {
+static int sid_attack(c64 *c, int base) {
   return ioreg(base + SID_AAAADDDD) >> 4;
 }
-int sid_decay(c64 *c, int base) {
+static int sid_decay(c64 *c, int base) {
   return ioreg(base + SID_AAAADDDD) & 0xF;
 }
-int sid_sustain(c64 *c, int base) {
+static int sid_sustain(c64 *c, int base) {
   return ioreg(base + SID_SSSSRRRR) >> 4;
 }
-int sid_release(c64 *c, int base) {
+static int sid_release(c64 *c, int base) {
   return ioreg(base + SID_SSSSRRRR) & 0xF;
 }
-uint32_t sid_freq(c64 *c, int base) {
+static uint32_t sid_freq(c64 *c, int base) {
   return ioreg16(base + SID_FREQLO);
 }
-int sid_duty(c64 *c, int base) {
+static int sid_duty(c64 *c, int base) {
   return ioreg16(base + SID_DUTYLO) & 0xFFF;
 }
-int sid_control(c64 *c, int base) {
+static int sid_control(c64 *c, int base) {
   return ioreg16(base + SID_CTRL);
 }
 
@@ -1233,7 +1368,7 @@ void c64::load(const char *romfile)
       b8.init(256, "8000");
       ba.init(256, "A000");
       be.init(256, "E000");
-      if (cart_type == 19) {
+      if (cart_type == 19 || cart_type == 5) {
 	register_handler(0xDE00, 0xDE01, 0x01, set19, &b8, _WR, "type19.sel");
       }
       for (uint32_t off = get32be(cartrom + 0x10); off < romsz; ) {
@@ -1484,6 +1619,10 @@ int bcd(int n)
 #define CBM_ROW 7
 #define CBM_COL 5
 
+/* IEC Bus
+ *  data,clock,atn,reset
+ */
+
 /* Keyboard mapping : 64 entries
  * DC00 : keyboard matrix col
  * DC01 : keyboard matrix row
@@ -1721,27 +1860,24 @@ int c64::scrmode()
 /* Load a sprite from VIC registers */
 bool sprite_t::load(c64 *c, int n, int y)
 {
-  /* Sprite upper left coords = (24,50) */
   const int sbit = (1L << n);
 
-  //printf("LoadSprite: %d, %d, %d\n", n, y, state);
-  
   /* Check if sprite enabled */
   if ((c->sprite_en & sbit) == 0)
     return false;
   
-  /* Get Sprite coordinate */
-  sy = ioreg(SPRITE_Y + (n * 2)) - 50;
+  /* Sprite upper left coords = (24,50) */
   sx = ioreg(SPRITE_X + (n * 2)) - 24;
+  sy = ioreg(SPRITE_Y + (n * 2)) - 50;
   if (c->sprite_x8 & sbit)
     sx += 256;
 
   /* Get extra attributes */
-  ex  = !!(c->sprite_ex  & sbit);
-  ey  = !!(c->sprite_ey  & sbit);
+  ex  = (c->sprite_ex & sbit) ? 2 : 1;
+  ey  = (c->sprite_ey & sbit) ? 2 : 1;
+  mc  = (c->sprite_mc & sbit) ? 2 : 1;
   pri = !!(c->sprite_pri & sbit);
-  mc  = !!(c->sprite_mc  & sbit) ? 2 : 1;
-  
+
   /* Get sprite bits position in RAM */
   sp = c->sprite_ptr[n] * 64 + c->vicbase;
 
@@ -1777,7 +1913,7 @@ void c64::drawsprite(int n, int y) {
 
   collide = false;
   pbits(&ram[s->sp], s->clr, 24, 21, s->sy - y, s->mc);
-  drawbmp(EX+s->sx, EY+s->sy, 24, 21, &ram[s->sp], s->ex+1, s->ey+1, s->mc, s->clr, y + EY);
+  drawbmp(EX+s->sx, EY+s->sy, 24, 21, &ram[s->sp], s->ex, s->ey, s->mc, s->clr, y + EY);
   if (collide) {
     ioreg(SPRITE_SPR) |= (1L << n);
   }
@@ -1788,25 +1924,24 @@ void c64::drawline(int y)
 {
   int clr[4], ch, smode;
   int sx, sy, cb, sb, bpp;
-
+  uint8_t bmp;
+  
   smode = scrmode();
   
   /* Get Memory pointers, screen, chrbase */
   sb = (memptr & 0xF0) << 6;
   cb = (memptr & 0x0E) << 10;
-  if (smode == mode_bitmap) {
-    // xxxx.Mxxx -> xxMx.xxxx.xxxx.xxxx, RAM @ 0000 or 2000
+  if (smode == mode_bitmap || smode == mode_mcbitmap) {
     cb = (memptr & 0x08) << 10;
-    printf("bitmap CB is %.8x\n", cb);
   }
 
   screen_ram = &ram[vicbase + sb];
-  sprite_ptr = screen_ram + 0x3f8;
+  sprite_ptr = &screen_ram[0x3F8];
   chrbase = vicbase + cb;
 
   /* Get XSCROLL/YSCROLL */
   sx = 0;
-  sy = 0;
+  sy = YSCROLL();
   for (int x = 0; x < 40; x++) {
     const int addr = (y * 40) + x;
 
@@ -1892,10 +2027,6 @@ void c64::drawframe()
   printf("============================\nframe: %6d scr:%.4x chr:%.4x %s\n",
 	 frame, vicbase+sb, chrbase,
 	 scrmodes[smode]);
-  printf("cia1:%.2x %.2x %.2x  cia2:%.2x %.2x %.2x  vic:%.2x %.2x %.2x\n",
-	 cia1.cia_irq.en, cia1.cia_irq.sts, ioreg(0xDC0D),
-	 cia2.cia_irq.en, cia2.cia_irq.sts, ioreg(0xDD0D),
-	 vic_irq.en,  vic_irq.sts,  ioreg(0xD01A));
   
   /* Poke CIA1/CIA2 RTC */
   rtc = localtime(&now);
@@ -1907,14 +2038,15 @@ void c64::drawframe()
   rtc2_h = bcd(rtc->tm_hour);
   
   frame++;
-  screen->scrtext(0, screen->height+5, 1, "frm:%d fps:%.2f %s %dx%d", frame, fps, scrmodes[smode],
+  screen->scrtext(0, screen->height+5, 1, "frm:%d fps:%.2f %s %dx%d",
+		  frame, fps, scrmodes[smode],
 		  cols, rows);
   screen->scrtext(0, screen->height+13, 1, 
 		 "v:%.4x s:%.4x c:%.4x EY:%d",
 		  vicbase, sb, cb, EY);
 
   /* Draw Raster line */
-  for (int i = 0; i < screen->height; i++) {
+  for (int i = 0; showsli && i < screen->height; i++) {
     if (sli[i]) {
       screen->scrline(0, i, 320+2*EY, 3);
     }
@@ -1995,7 +2127,7 @@ void c64::ppu_tick()
 {
   static uint32_t dot, nextline = CYCLES_PER_LINE;
   int smode = scrmode();
-  int row = scanline - EY;
+  int row = scanline - EY - YSCROLL();
 
   if (++dot < nextline) {
     return;
@@ -2013,7 +2145,6 @@ void c64::ppu_tick()
 	drawsprite(i, row);
       }
       //draw line every 8-rows
-      //screen->scrline(0, EY+row, 320+2*EY, 8);
     }
   }
   /* Increase scanline, get next cycles */
@@ -2068,33 +2199,15 @@ void c64::run(const char *prgfile)
   }
   cpu_reset(iPC);
   for(;;) {
-    if (SPC == 0x8a46) {
-      trace = 1;
-    }
     if (hlt) {
       hexdump(ram, 65536, 32);
       exit(0);
     }
     cycs = cpu_step();
     for (n = 0; n < cycs; n++) {
-      // tick timers
-      if (cia1.tmra.tick()) {
-	fprintf(stdout,"---- tick A1 [%d] sts:%.2x en:%.2x\n", cia1.tmra.reset, cia1.cia_irq.sts, cia1.cia_irq.en);
-	cia1.cia_irq.set(CIA1_IRQ_TMRA);
-      }
-      if (cia1.tmrb.tick()) {
-	fprintf(stdout,"---- tick B1 [%d] sts:%.2x en:%.2x\n", cia1.tmrb.reset, cia1.cia_irq.sts, cia1.cia_irq.en);
-	cia1.cia_irq.set(CIA1_IRQ_TMRB);
-      }  
-      if (cia2.tmra.tick()) {
-	fprintf(stdout,"---- tick A2 [%d] sts:%.2x en:%.2x\n", cia2.tmra.reset, cia2.cia_irq.sts, cia2.cia_irq.en);
-	cia2.cia_irq.set(CIA2_IRQ_TMRA);
-      }
-      if (cia2.tmrb.tick()) {
-	fprintf(stdout,"---- tick B2 [%d] sts:%.2x en:%.2x\n", cia2.tmrb.reset, cia2.cia_irq.sts, cia2.cia_irq.en);
-	cia2.cia_irq.set(CIA2_IRQ_TMRB);
-      }
       // tick ppu,sid
+      cia1.tick();
+      cia2.tick();
       ppu_tick();
       sid_tick();
     }
@@ -2118,7 +2231,7 @@ void c64::run(const char *prgfile)
 	cia1.cia_irq.clear(pendcia1);
       }
       if (rc && pendvic) {
-	cia1.cia_irq.clear(pendvic);
+	vic_irq.clear(pendvic);
       }
     }
   }
@@ -2139,6 +2252,9 @@ int main(int argc, char *argv[])
   }
   if (argc > n) {
     const char *a=argv[n];
+    if (strstr(a, ".d64")) {
+      dsk = new d64(a);
+    }
     if (strstr(a,".CRT") || strstr(a,".crt")) {
       romfile = argv[n];
     }
