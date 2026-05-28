@@ -158,13 +158,13 @@ const char *cpu_getstate()
   int F = cpu_getflags();
   
   snprintf(dstr, sizeof(dstr),
-	   "PC:%.4x | BC=%.2x%.2x DE=%.2x%.2x HL=%.2x%.2x AF=%.2x%.2x SP=%.4x [%c%c%c%c%c]",
-	   SPC, B, C, D, E, H, L, A, F, SP,
-	   Zf ? 'z' : ' ',
-	   Nf ? 'n' : ' ',
-	   Hf ? 'h' : ' ',
-	   Cf ? 'c' : ' ',
-	   If ? 'i' : ' ');
+           "PC:%.4x | BC=%.2x%.2x DE=%.2x%.2x HL=%.2x%.2x AF=%.2x%.2x SP=%.4x [%c%c%c%c%c]",
+           SPC, B, C, D, E, H, L, A, F, SP,
+           Zf ? 'z' : ' ',
+           Nf ? 'n' : ' ',
+           Hf ? 'h' : ' ',
+           Cf ? 'c' : ' ',
+           If ? 'i' : ' ');
   return dstr;
 }
 
@@ -431,7 +431,18 @@ static void gb_dec(fnargs)  {
 }
 
 static void gb_stop(fnargs) { }
-static void gb_hlt(fnargs)  { izhlt = 1; }
+static void gb_hlt(fnargs)  {
+  extern bool checkhlt();
+
+  printf("halt here: %x %x\n", If, checkhlt());
+  if (If || !checkhlt()) {
+    izhlt = 1;
+  }
+  else {
+    izhlt = 2;
+  }
+};
+
 static void gb_push(fnargs) { cpu_push16(src); }
 static void gb_pop(fnargs)  { gb_setval(ib, dst, cpu_pop16()); }
 
@@ -1219,10 +1230,10 @@ static const char *disasm(int pc, uint8_t *ib) {
   }
   while (*s) {
     if (replace(&s, "d8", &d, "%.2X", ib[1]) ||
-	replace(&s, "%rs",&d, regname[*ib & 7]) ||
-	replace(&s, "%rd",&d, regname[(*ib >> 3) & 7]) ||
-	replace(&s, "d16",&d, "%.2X%.2X", ib[2], ib[1]) ||
-	replace(&s, "r8", &d, "%.4X", pc+(int8_t)ib[1]))
+        replace(&s, "%rs",&d, regname[*ib & 7]) ||
+        replace(&s, "%rd",&d, regname[(*ib >> 3) & 7]) ||
+        replace(&s, "d16",&d, "%.2X%.2X", ib[2], ib[1]) ||
+        replace(&s, "r8", &d, "%.4X", pc+(int8_t)ib[1]))
       continue;
     *d++ = *s++;
   }
@@ -1305,7 +1316,7 @@ int cpu_step() {
   src = gb_getval(ib, op->arg1);
   if (trace) {
     fprintf(stdout, "%s | %.2x %.2x %.2x | '%s'\n", cpu_getstate(), ib[0], ib[1], ib[2],
-	    disasm(PC, ib));
+            disasm(PC, ib));
   }
   pcflag = 0;
   op->fn(ib, dst, src);
@@ -1411,16 +1422,22 @@ const char *fnname(uint32_t addr) {
   return "";
 }
 
-void dumpcfg(uint8_t *buf, size_t len, int off)
+void dumpcfg(uint8_t *buf, size_t len, int n, int offs[])
 {
-  int op, pc, next[2];
+  int off, op, pc, next[2];
   opcode_t *opc;
   dstk stk(len, printf);
-  
-  stk.push(off, 1, dstk::PENDING, "first");
+
+  auto rel8 = [&]() { return 2 + pc + (int8_t)buf[pc+1]; };
+  auto fetch16 = [&]() { return *(uint16_t *)&buf[pc+1]; };
+
+  for (int i = 0; i < n; i++) {
+    stk.push(offs[i], 1, dstk::PENDING, "first");
+    printf("push: %x\n", offs[i]);
+  }
   while ((off = stk.pop()) != -1) {
     printf("\n------------------------------ %.8x [%s]\n",
-	   off, fnname(off));
+           off, fnname(off));
     do {
       /* Get code */
       pc = off;
@@ -1428,8 +1445,8 @@ void dumpcfg(uint8_t *buf, size_t len, int off)
       opc = &optab[op];
 
       if (op == 0xCB) {
-	op = buf[pc+1];
-	opc = &cbmap[op];
+        op = buf[pc+1];
+        opc = &cbmap[op];
       }
       stk.push(pc, opc->nb, dstk::CODE, "code");
 
@@ -1440,39 +1457,39 @@ void dumpcfg(uint8_t *buf, size_t len, int off)
       
       switch(op) {
       case 0xc0: case 0xc8: case 0xc9: case 0xd0: case 0xd8: case 0xd9: case 0xe9:
-	// retxx, jphl
-	next[0] = -1;
-	break;
+        // retxx, jphl
+        next[0] = -1;
+        break;
       case 0xc7: case 0xcf: case 0xd7: case 0xdf: case 0xe7: case 0xef: case 0xf7: case 0xff:
-	// rst
-	next[0] = -1;
-	break;
+        // rst
+        next[0] = -1;
+        break;
       case 0xc3:
-	// jmp, uncond
-	next[0] = -1;
-	next[1] = *(uint16_t *)&buf[pc+1];
-	break;
+        // jmp, uncond
+        next[0] = -1;
+        next[1] = fetch16();
+        break;
       case 0xc2: case 0xca: case 0xd2: case 0xda:
-	// jmp, cond
-	next[0] = *(uint16_t *)&buf[pc+1];
-	break;
+        // jmp, cond
+        next[0] = fetch16();
+        break;
       case 0x18:
-	// jr, uncond
-	next[0] = pc + (int8_t)buf[pc+1] + 2;
-	break;
+        // jr, uncond
+        next[0] = rel8();
+        break;
       case 0x20: case 0x28: case 0x30: case 0x38:
-	// jr, cond
-	next[1] = pc + (int8_t)buf[pc+1] + 2;
-	break;
+        // jr, cond
+        next[1] = rel8();
+        break;
       case 0xc4: case 0xcc: case 0xcd: case 0xd3: case 0xdc:
-	// call
-	next[1] = *(uint16_t *)&buf[pc+1];
-	break;
+        // call
+        next[1] = fetch16();
+        break;
       default:
-	break;
+        break;
       }
       for (int n = 0; n < 2; n++) {
-	stk.push(next[n], 1, dstk::PENDING, "nxt");
+        stk.push(next[n], 1, dstk::PENDING, "nxt");
       }
     } while (next[0] != -1 && next[1] == -1);
   };
@@ -1523,8 +1540,8 @@ void dumptab()
   
   for (i = 0; i < 256; i++) {
     printf("_(%-6s, %-4s, %-4s, %d, %4d, ",
-	   t->mnem ? t->mnem : "NULL", sarg(t->arg0), sarg(t->arg1),
-	   t->nb, t->cycs);
+           t->mnem ? t->mnem : "NULL", sarg(t->arg0), sarg(t->arg1),
+           t->nb, t->cycs);
     snprintf(str, sizeof(str), "\"%s\"", t->mnem);
     printf("%-30s ),\n", str);
     t++;
@@ -1556,4 +1573,3 @@ int main(int argc, char *argv[])
 }
 
 #endif
-

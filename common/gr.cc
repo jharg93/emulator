@@ -32,7 +32,15 @@ void waitFrame() {
     cur_frame = GetClock();
   } while ((cur_frame - last_frame) < MS_PER_FRAME);
   last_frame = cur_frame;
-};  
+};
+
+void plot(pixbuf& p, int pri, int clr, int pclr) {
+  if (pri >= p.pri && clr != -1) {
+    p.pri = pri;
+    p.clr = clr;
+    p.pclr = pclr;
+  }
+}
 
 // https://stackoverflow.com/questions/31999935/how-to-get-an-sdl-pixelformat-from-an-sdl-pixelformatenum-or-sdl-texture
 #ifdef AUDIO
@@ -139,19 +147,19 @@ void Screen::setKeyState(SDL_Event& event, bool state)
     sdl_keyhook(event.key.keysym.sym, event.key.keysym.mod, state);
   }
   sk = sdl_mapkey(&event);
-  KeyState[sk] = state;
+  keyState[sk] = state;
   printf("keystate: %.2x[%c] = %d\n", sk, sk >= ' ' && sk <= 'z' ? sk: 'x', state);
   if (event.key.keysym.mod & KMOD_LSHIFT) {
-    KeyState[Key::K_LSHIFT] = state;
+    keyState[Key::K_LSHIFT] = state;
   }
   if (event.key.keysym.mod & KMOD_RSHIFT) {
-    KeyState[Key::K_RSHIFT] = state;
+    keyState[Key::K_RSHIFT] = state;
   }
   if (event.key.keysym.mod & KMOD_LCTRL) {
-    KeyState[Key::K_LCTRL] = state;
+    keyState[Key::K_LCTRL] = state;
   }
   if (event.key.keysym.mod & KMOD_RCTRL) {
-    KeyState[Key::K_RCTRL] = state;
+    keyState[Key::K_RCTRL] = state;
   }
 }
 

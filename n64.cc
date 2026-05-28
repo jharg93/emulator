@@ -737,6 +737,7 @@ struct VI : public mmio {
 
   void show() {
     printf("ctrl:     %.8x\n", xx(vi_ctrl));
+    printf("mode:     %s\n", (vi_ctrl & 0x3) == 2 ? "555" : "888");
     printf("origin:   %.8x\n", xx(vi_origin));
     printf("width:    %.8x\n", xx(vi_width));
     printf("v_intr:   %.8x\n", xx(vi_v_intr));
@@ -769,8 +770,6 @@ struct AI : public mmio {
   uint32_t ai_status;       // 0c: rw  gen_irq(true, AI);
   uint32_t ai_decrate;      // 10: w   
   uint32_t ai_bitrate;      // 14: w
-
-  uint32_t rdwr(uint32_t addr, uint32_t value, bool write);
 };
 
 /*================================================================*
@@ -893,9 +892,17 @@ const char *fnname(uint32_t addr) {
   return "xxx";
 }
 
-static MI mi;
-static VI vi;
-static PI pi;
+struct n64 {
+  MI mi;
+  VI vi;
+  PI pi;
+  AI ai;
+  SI si;
+  RI ri;
+  RSP_CP0 cp0;
+
+  void init(uint8_t *rom, size_t romsz, uint64_t pc);
+};
 
 uint8_t cpu_read8(const uint32_t addr, int type) {
   iodata_t d;
@@ -1108,10 +1115,10 @@ enum {
 const etab efns[] = {
   mkop(0x002, "000010.kkkkk.kkkkk.kkkkk.kkkkk.kkkkkk", true,  &cpu::j,     J26,     "j      %j"),
   mkop(0x003, "000011.kkkkk.kkkkk.kkkkk.kkkkk.kkkkkk", true,  &cpu::jal,   J26,     "jal    %j"),
-  mkop(0x004, "000100.sssss.ttttt.iiiii.iiiii.iiiiii", true,  &cpu::beq,   RtRsS16, "beq    %Rt, %Rs, %i"),
-  mkop(0x005, "000101.sssss.ttttt.iiiii.iiiii.iiiiii", true,  &cpu::bne,   RtRsS16, "bne    %Rt, %Rs, %i"),
-  mkop(0x006, "000110.sssss.ttttt.iiiii.iiiii.iiiiii", true,  &cpu::blez,  RtRsS16, "blez   %Rt, %Rs, %i"),
-  mkop(0x007, "000111.sssss.ttttt.iiiii.iiiii.iiiiii", true,  &cpu::bgtz,  RtRsS16, "bgtz   %Rt, %Rs, %i"),
+  mkop(0x004, "000100.sssss.ttttt.iiiii.iiiii.iiiiii", true,  &cpu::beq,   RtRsS16, "beq    %Rs, %Rt, %i"),
+  mkop(0x005, "000101.sssss.ttttt.iiiii.iiiii.iiiiii", true,  &cpu::bne,   RtRsS16, "bne    %Rs, %Rt, %i"),
+  mkop(0x006, "000110.sssss.ttttt.iiiii.iiiii.iiiiii", true,  &cpu::blez,  RtRsS16, "blez   %Rs, %Rt, %i"),
+  mkop(0x007, "000111.sssss.ttttt.iiiii.iiiii.iiiiii", true,  &cpu::bgtz,  RtRsS16, "bgtz   %Rs, %Rt, %i"),
 
   mkop(0x008, "001000.sssss.ttttt.iiiii.iiiii.iiiiii", false, &cpu::addi,  RtRsS16, "addi   %Rt, %Rs, %i"),
   mkop(0x009, "001001.sssss.ttttt.iiiii.iiiii.iiiiii", false, &cpu::addiu, RtRsS16, "addiu  %Rt, %Rs, %i"),
@@ -1407,7 +1414,6 @@ void cpu::exec()
   default:
     printf("\n%.8x ==== op: %.8x %.4x %.2x %.2x\n", (int)PC, op, opfn, rt, rs);
     showregs();
-    vi.show();
   }
 #endif
 }
@@ -1462,7 +1468,7 @@ void dumpcfg(uint8_t *rom, size_t size, int off)
   exit(0);
 }
 
-void init(uint8_t *rom, size_t romsz, uint64_t pc)
+void n64::init(uint8_t *rom, size_t romsz, uint64_t pc)
 {
   cpu c;
   Screen *scr;
@@ -1472,8 +1478,8 @@ void init(uint8_t *rom, size_t romsz, uint64_t pc)
   //dumpcfg(rom, romsz, 0x1000);
 
   scr = new Screen(640, 480, 400, 50);
-  scr->xs = 2;
-  scr->ys = 2;
+  scr->xs = 1;
+  scr->ys = 1;
 
   mb.register_handler(0x00000000, romsz, 0x0fffffff, bememio, rom, _RW, "ROM");
   //set_page(0x80000000,   romsz, rom);
@@ -1489,9 +1495,12 @@ void init(uint8_t *rom, size_t romsz, uint64_t pc)
 #endif
     c.exec();
     if (cycles++ == 13000) {
+      void *vidmem = &rom[xx(vi.vi_origin) & 0xffffff];
+      
       cycles = 0;
-
-      drawscr(scr, 0, 0, xx(vi.vi_width) & 0x3FF, 400, (uint32_t*)&rom[0x100000]);
+      vi.show();
+      hexdump(vidmem, xx(vi.vi_width), 32);
+      drawscr(scr, 0, 0, xx(vi.vi_width) & 0x3FF, 400, (uint32_t *)vidmem);
       scr->scrtext(0, scr->height+5, MKRGB(255,255,0), "frame:%d %.8x %3d",
 		   frame++, xx(vi.vi_origin), xx(vi.vi_width));
       
@@ -1507,7 +1516,8 @@ int main(int argc, char *argv[])
   uint8_t *rom;
   size_t romsz;
   RomHeader *hdr;
-
+  n64 n={};
+    
   if (argc > 1) {
     rom = loadrom(argv[1], romsz, true);
   } else {
@@ -1518,5 +1528,5 @@ int main(int argc, char *argv[])
   printf("romsz: %x %x '%.20s'\n", (int)romsz, *(uint32_t *)rom, hdr->image_name);
   printf("PC: %.8x %.2x\n", get32be(&hdr->program_counter), rom[0]);
   printf("CRC: %.8x\n", crc32(&rom[0x40], 0x1000 - 0x40));
-  init(rom, romsz, get32be(&hdr->program_counter));
+  n.init(rom, romsz, get32be(&hdr->program_counter));
 }

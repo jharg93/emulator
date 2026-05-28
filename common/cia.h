@@ -20,6 +20,41 @@ enum CiaReg {
   CRB,
 };
 
+/* CIA Registers
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 00 pra
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 01 prb
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 02 ddra
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 03 ddrb
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 04 talo
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 05 tahi
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 06 tblo
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 07 tbhi
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 08 tod0 1/10 sec
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 09 tod1 sec
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 0a tod2 min
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 0b tod3 hr
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |     |     |     |     |     |     |     | 0c sdr 
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |     |  0  |  0  |flag |sp   |alrm |tb   |ta   | 0d icr
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |todin|spmod|imode|force|rmode|omode|pb6on|start| 0e cra
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |alarm|     |imode|force|rmode|omode|pb7on|start| 0f crb
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ */
 static const char *crb_mode[] = {
   "Timer B counts 02 pulses",
   "Timer B counts positive CNT transitions",
@@ -50,7 +85,7 @@ struct cia_t {
       regs[TOD0+n] = v;
     }
   };
-  int tlatch(int n) {
+  int tlatch(int n) const {
     int freq = (regs[n+1] << 8) + regs[n];
     if (freq == 0)
       freq = 65536;
@@ -59,52 +94,47 @@ struct cia_t {
   void setreg(uint32_t addr, uint8_t val) {
     assert(addr <= 0xf);
     switch (addr) {
-    case CiaReg::TAHI:
+    case TAHI:
       /* In one-shot mode, a write to timer-high (register 5 for timer A, register
        * 7 for Timer B) will transfer the timer latch to the counter and initiate
        * counting regardless of the start bit. */
       regs[TAHI] = val;
       if (regs[CRA] & 0x08) {
-	tmra_freq = tlatch(CiaReg::TALO);
+	tmra_freq = tlatch(TALO);
 	tmra.settimer(tmra_freq, false, true, "tmra");
       }
       break;
-    case CiaReg::TBHI:
+    case TBHI:
       regs[TBHI] = val;
       if (regs[CRB] & 0x08) {
-	tmrb_freq = tlatch(CiaReg::TBLO);
+	tmrb_freq = tlatch(TBLO);
 	tmrb.settimer(tmrb_freq, false, true, "tmrb");
       }
       break;
-    case CiaReg::TOD0:
+    case TOD0:
       settod(0, val);
       break;
-    case CiaReg::TOD1:
+    case TOD1:
       settod(1, val);
       break;
-    case CiaReg::TOD2:
+    case TOD2:
       settod(2, val);
       break;
     case ICR:
       cia_irq.enable(val & 0x7f, val & 0x80);
       break;
-    case CiaReg::CRA:
-      /* +-----+-----+-----+-----+-----+-----+-----+-----+
-       * |     |smode|imode|load |onest|omode|pmode|start|
-       * +-----+-----+-----+-----+-----+-----+-----+-----+*/
+    case CRA:
       regs[CRA] = val;
       if ((val & 0b11100110) != 0)  {
 	printf("cia%d: cra icky\n", id);
       }
-      printf("cia%d: cra %.2x %s [%s]\n", id, val, sbits8("-SILOops", val),
+      printf("cia%d: cra %.2x %s [%s]\n", id, val,
+	     sbits8("-SILOops", val),
 	     cra_mode[(val>>5) & 1]);
-      tmra_freq = tlatch(CiaReg::TALO);
+      tmra_freq = tlatch(TALO);
       tmra.settimer(tmra_freq, !(val & 0x8), (val & 0x1), "tmra");
       break;
-    case CiaReg::CRB:
-      /* +-----+-----+-----+-----+-----+-----+-----+-----+
-       * |alarm|    imode  |load |onest|omode|pmode|start|
-       * +-----+-----+-----+-----+-----+-----+-----+-----+*/
+    case CRB:
       regs[CRB] = val;
       if ((val & 0b01100110) != 0)  {
 	printf("cia%d: crb icky\n", id);
@@ -112,9 +142,10 @@ struct cia_t {
       if (val & 0x80) {
 	printf("cia CRB ALARM!\n");
       }
-      printf("cia%d: crb %.2x %s [%s]\n", id, val, sbits8("AIILOops", val),
+      printf("cia%d: crb %.2x %s [%s]\n", id, val,
+	     sbits8("AIILOops", val),
 	     crb_mode[(val>>5) & 3]);
-      tmrb_freq = tlatch(CiaReg::TBLO);
+      tmrb_freq = tlatch(TBLO);
       tmrb.settimer(tmrb_freq, !(val & 0x8), (val & 0x1), "tmrb");
       break;
     default:
@@ -127,15 +158,15 @@ struct cia_t {
 
     uint8_t val = regs[addr];
     switch (addr) {
-    case CiaReg::TALO:
+    case TALO:
       return tmra.count;
-    case CiaReg::TAHI:
+    case TAHI:
       return tmra.count >> 8;
-    case CiaReg::TBLO:
+    case TBLO:
       return tmrb.count;
-    case CiaReg::TBHI:
+    case TBHI:
       return tmrb.count >> 8;
-    case CiaReg::ICR:
+    case ICR:
       val = cia_irq.sts;
       cia_irq.sts = 0;
       break;

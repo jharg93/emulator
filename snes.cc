@@ -1623,8 +1623,8 @@ void ppu_t::runhdma(int y)
 
 snes_crtc sc(&ppu);
 
-uint32_t ssr[32];
-struct rr_t readreg[] = {
+static uint32_t ssr[32];
+static struct rr_t snesreg[] = {
   { "pc", &ssr[0] },
   { "s", &ssr[1] },
   { "p", &ssr[2] },
@@ -1638,7 +1638,7 @@ struct rr_t readreg[] = {
   { },
 };
 
-void runjson(uint32_t *p) {
+static void snes_test_json(uint32_t *p) {
   cpu_setflags(ssr[2]);
   PC = ssr[0];
   _S = ssr[1];
@@ -1688,7 +1688,7 @@ int main(int argc, char *argv[])
     uint8_t *mem = new uint8_t[0x1000000]{0};
     mmu.register_handler(0x000000, 0xFFFFFF, 0xFFFFFF, memio, mem, _RW, "ram");
     mkop();
-    read_json(argv[1], readreg, mem, runjson);
+    //read_json(argv[1], snesreg, mem, snes_test_json);
     exit(0);
   }
   cart = loadrom(argv[1], sz);

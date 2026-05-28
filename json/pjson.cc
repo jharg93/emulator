@@ -9,7 +9,7 @@
 
 #ifdef PJSON
 /* Get registers from dict */
-int getreg(json_node *n, rr_t *r, int flag) {
+static int getreg(json_node *n, rr_t *r, int flag) {
   uint32_t rv;
   int error = 0;
 
@@ -26,10 +26,12 @@ int getreg(json_node *n, rr_t *r, int flag) {
     if (flag == 0) {
       // store value to pointer
       *r->val = rv;
+      printf("%s <- %.8x\n", r->name, rv);
     }
     else if (flag == 1 && (rv != *r->val)) {
       // check if value is correct
-      printf("  assertion failure: %s %.2x!=%.2x\n",
+      printf("%s <- %.8x\n", r->name, rv);
+      printf("  assertion failure: %s got:%.8x expect:%.8x\n",
 	     r->name, *r->val, rv);
       error++;
     }
@@ -38,7 +40,7 @@ int getreg(json_node *n, rr_t *r, int flag) {
   return error;
 }
 
-int getmem(json_node *n, uint8_t *mem, int flag) {
+static int getmem(json_node *n, uint8_t *mem, int flag) {
   int error = 0;
 
   if (!n) {
@@ -51,12 +53,12 @@ int getmem(json_node *n, uint8_t *mem, int flag) {
     uint32_t memaddr = v->list[0]->toint();
     uint32_t rv = v->list[1]->toint();
 
-    //printf("  %.8x <- %.2x\n", memaddr, rv);
+    printf("  %.8x <- %.2x\n", memaddr, rv);
     if (flag == 0) {
       mem[memaddr] = rv;
     }
     else if (flag == 1 && (mem[memaddr] != rv)) {
-      printf("  assertion failure: %.8x %x!=%x\n",
+      printf("  assertion failure: %.8x got:%.2x expect:%.2x\n",
 	     memaddr, mem[memaddr], rv);
       error++;
     }
@@ -64,31 +66,35 @@ int getmem(json_node *n, uint8_t *mem, int flag) {
   return error;
 }
 
+extern void done_json();
+
 // Run single-step processor tests
 // https://github.com/SingleStepTests/ProcessorTests
 //   mem points to memory buffer
 //   run executes code with possible prefetch
 //   rr_t contains list of register names and a pointer (uint32_t)
+template <Arch a>
 void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32_t *)) {
-  int fd, rc = 0;
   uint32_t prefetch[2];
   JsonParser p;
   json_node r;
+  int rc = 0;
 
   p.load(file);
   p.Parse(&r);
-  for (auto l : r.list) {
+  for (auto json : r.list) {
     int errors;
     
-    auto name = l->map["name"];
+    auto name = json->map["name"];
     if (!name)
       continue;
     printf("===========================\n");
     printf("test: %s\n", name->tostr());
 
     /* Get initial state */
-    auto ini = l->map["initial"];
-    if (!ini)
+    auto ini = json->map["initial"];
+    auto fin = json->map["final"];
+    if (!ini || !fin)
       continue;
     getreg(ini, regread, 0);
     getmem(ini, mem, 0);
@@ -96,15 +102,14 @@ void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32
       auto pf = ini->map["prefetch"];
       prefetch[0] = pf->list[0]->toint();
       prefetch[1] = pf->list[1]->toint();
+      printf("prefetch: %.8x %.8x\n", prefetch[0], prefetch[1]);
     }
 
-    /* Run cpu */
+    /* Run cpu single-step */
+    PC -= 4;
     run(prefetch);
     
     /* Compare final state */
-    auto fin = l->map["final"];
-    if (!fin)
-      continue;
     errors = 0;
     errors += getreg(fin, regread, 1);
     errors += getmem(fin, mem, 1);
@@ -116,6 +121,8 @@ void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32
       rc = 1;
     }
   }
+  done_json();
+  printf("exit: %d\n", rc);
   exit(rc);
 }
 #else

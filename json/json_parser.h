@@ -1,42 +1,44 @@
 #ifndef __json_parser_h__
 #define __json_parser_h__
 #include <assert.h>
-
-#include <map>
 #include <iostream>
 #include <vector>
+#include <map>
+#include <chrono>
 
+struct perf {
+  std::chrono::time_point<std::chrono::high_resolution_clock> start;
+  perf() : start(std::chrono::high_resolution_clock::now()) {
+  };
+  ~perf() {
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "Function took " << duration << " ms\n";
+  };
+};
+
+/* Store contents of a json node
+ *  It can be a string, a list, or a map (dict)
+ */
 struct json_node {
   int type;
   std::string string;
   std::vector<json_node *> list;
   std::map<std::string, json_node *> map;
-  uint32_t toint() {
+  uint32_t toint() const {
     return strtoull(string.c_str(), 0, 0);
   };
-  const char *tostr() {
+  const char *tostr() const {
     return string.c_str();
   };
 };
 
-void print_json(json_node *n, int);
-
-struct JsonParser {
+/* JsonParser class */
+class JsonParser {
   int pos = 0, size = 0, lastch = -1;
   char *buffer = NULL;
 
-  int load(const char *file) {
-    int fd;
-    
-    if ((fd = open(file, O_RDONLY)) < 0) {
-      exit(0);
-    }
-    size = lseek(fd, 0, SEEK_END);
-    buffer = new char[size];
-    pread(fd, buffer, size, 0);
-    close(fd);
-  };
-  int nextch(bool ws, const char *expect = NULL) {
+  int nextch(bool skipws, const char *expect = NULL) {
     char ch;
     
     do {
@@ -50,7 +52,7 @@ struct JsonParser {
       else {
 	ch = buffer[pos++];
       }
-      if (!ws)
+      if (!skipws)
 	break;
     } while (isspace(ch));
     if (expect != NULL) {
@@ -68,14 +70,17 @@ struct JsonParser {
     }
     lastch = ch;
     do {
-      json_node k={};
-      json_node *v = new json_node;
-      
+      json_node k={}, *v = NULL;
+
+      // parse key
       parse_json(&k);
       ch = nextch(true, ":");
       if (ch < 0) {
 	return;
       }
+
+      // parse value
+      v = new json_node{};
       parse_json(v);
       n->map[k.string] = v;
       ch = nextch(true, "},");
@@ -91,27 +96,34 @@ struct JsonParser {
     }
     lastch = ch;
     do {
-      auto j = new json_node;
+      // create new node, add to list
+      auto j = new json_node{};
       n->list.push_back(j);
+      // recursively parse list items
       parse_json(j);
       ch = nextch(true, "],");
     } while (ch == ',');
   };
 
+  // Recursively parse json data
   int parse_json(json_node *n) {
     char ch;
-    
+
+    // get next token character
     ch = nextch(true);
     if (ch < 0) {
       return 0;
     }
     if (ch == '[') {
+      // list
       parseList(n);
     }
     else if (ch == '{') {
+      // dict
       parseDict(n);
     }
     else if (ch == '\"') {
+      // quoted string
       n->type = 's';
       ch = nextch(false);
       while (ch >= 0 && ch != '\"') {
@@ -120,6 +132,7 @@ struct JsonParser {
       };
     }
     else if (isalnum(ch)) {
+      // otherwise, integer? store string
       n->type = 's';
       do {
 	n->string += ch;
@@ -133,12 +146,27 @@ struct JsonParser {
     }
     return 2;
   };
+public:
+  int load(const char *file) {
+    int fd;
+    
+    if ((fd = open(file, O_RDONLY)) < 0) {
+      exit(0);
+    }
+    size = lseek(fd, 0, SEEK_END);
+    buffer = new char[size];
+    pread(fd, buffer, size, 0);
+    close(fd);
+    return 0;
+  };
   void Parse(json_node *r) {
+    perf p;
     while (pos < size)
       parse_json(r);
   };
 };
 
+/* Print json tree */
 void print_json(json_node *node, int lvl) {
   if (!node){
     return;
@@ -149,9 +177,11 @@ void print_json(json_node *node, int lvl) {
     }
   };
   if (node->type == 's') {
+    // node is string
     std::cout << "\"" << node->string << "\"";
   }
   else if (node->type == 'l') {
+    // node is list
     std::cout << "[\n";
     for (auto i=0; i < node->list.size(); i++) {
       print_indent(lvl+1);
@@ -163,6 +193,7 @@ void print_json(json_node *node, int lvl) {
     std::cout << "]";
   }
   else if (node->type == 'd') {
+    // node is dict
     std::cout << "{\n";
     for (auto it = node->map.begin(); it != node->map.end(); ++it) {
       print_indent(lvl+1);
@@ -175,5 +206,4 @@ void print_json(json_node *node, int lvl) {
     std::cout << "}";
   }
 }
-
 #endif

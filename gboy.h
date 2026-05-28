@@ -160,84 +160,9 @@ struct gbhdr_t {
   uint8_t cksum[2];       // header/global checksum
 };
 
-enum gbreg_t {
-  REGMASK = 0xFF,
-#if 0
-  /* Joypad */
-  P1   = 0xFF00,
-
-  /* Serial */
-  SB   = 0xFF01,   // rw
-  SC   = 0xFF02,   // rw
-
-  /* Timer */
-  DIV  = 0xFF04,   // rw
-  TIMA = 0xFF05,   // rw
-  TMA  = 0xFF06,   // rw
-  TAC  = 0xFF07,   // rw
-
-  /* Interrupt flag and enable */
-  IF   = 0xFF0F,
-  IE   = 0xFFFF,
-
-  /* Sound */
-  NR10 = 0xFF10,  // rw ch1 -PPP.NSSS sweep
-  NR11 = 0xFF11,  // rw ch1 DDLL.LLLL sound length/wave pattern duty (64-L)
-  NR12 = 0xFF12,  // rw ch1 VVVV.APPP volume envelope
-  NR13 = 0xFF13,  // rw ch1 FFFF.FFFF freq lo
-  NR14 = 0xFF14,  // rw ch1 TL--.-FFF freq hi
-
-  NR21 = 0xFF16,  // rw ch2 DDLL.LLLL sound length/wave pattern duty (64-L)
-  NR22 = 0xFF17,  // rw ch2 VVVV.APPP volume envelope
-  NR23 = 0xFF18,  // rw ch2 FFFF.FFFF freq lo
-  NR24 = 0xFF19,  // rw ch2 TL--.-FFF freq hi
-
-  NR30 = 0xFF1A,  // rw ch3 E---.---- sound on/off
-  NR31 = 0xFF1B,  // rw ch3 LLLL.LLLL sound length/wave pattern duty (256-L)
-  NR32 = 0xFF1C,  // rw ch3 -VV-.---- volume envelope
-  NR33 = 0xFF1D,  // rw ch3 FFFF.FFFF freq lo
-  NR34 = 0xFF1E,  // rw ch3 TL--.-FFF freq hi
-  
-  NR41 = 0xFF20,  // rw ch4 --LL.LLLL sound length (64-L)
-  NR42 = 0xFF21,  // rw ch4 VVVV.APPP volume envelope
-  NR43 = 0xFF22,  // rw ch4 SSSS.WDDD poly counter
-  NR44 = 0xFF23,  // rw ch4 TL--.---- counter
-
-  NR50 = 0xFF24,  // ALLL.BRRR channel control on/off  volume
-  NR51 = 0xFF25,  // NW21.NW21 sound output terminal
-  NR52 = 0xFF26,  // P---.NW21 sound on/off
-
-  /* PPU */
-  LCDC = 0xFF40,  // rw
-  STAT = 0xFF41,  // rw
-  SCY  = 0xFF42,  // rw ScrollY
-  SCX  = 0xFF43,  // rw ScrollX
-  LY   = 0xFF44,  // r  Scanline
-  LYC  = 0xFF45,  // rw Scanline Compare
-  DMA  = 0xFF46,  // wo DMA Start Address
-  BGP  = 0xFF47,  // rw DMG Background Palette
-  OBP0 = 0xFF48,  // rw DMG Sprite Palette 0
-  OBP1 = 0xFF49,  // rw DMG Sprite Palette 1
-  WY   = 0xFF4A,  // rw WindowY
-  WX   = 0xFF4B,  // rw WindowX (-7)
-
-  /* CGB Specific registers */
-  BGPI = 0xFF68,  // Background Palette Index (00-3F)
-  BGPD = 0xFF69,  // Background Palette Data
-  OBPI = 0xFF6A,  // Sprite Palette Index     (00-3F)
-  OBPD = 0xFF6B,  // Sprite Palette Data
-  VBK  = 0xFF4F,  // VRAM Bank (0/1)
-  HDMA1= 0xFF51,  // DMA Source, lo (0000-7FF0 or A000-DFF0)
-  HDMA2= 0xFF52,  // DMA Source, hi
-  HDMA3= 0xFF53,  // DMA Target, lo (8000-9FF0)
-  HDMA4= 0xFF54,  // DMA Target, hi
-  HDMA5= 0xFF55,  // DMA Length+Start
-
-  WBANK = 0xFF70,
-#endif
-};
-
 enum {
+  REGMASK = 0xff,
+  
   /* LCDC Flag
    * +----+----+----+----+----+----+----+----+
    * | en |winm|wine|bgtl|bgmp|spsz|spen|bgen|

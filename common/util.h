@@ -157,16 +157,21 @@ struct Timer {
     count = ctr;
     reset = reload ? ctr : -1;
   };
+  void force_load(const char *_name = "??") {
+    zprint("Force load timer[%s]: %d\n", _name, latch);
+    count = latch;
+    reset = -1;
+    enabled = true;
+  };
 
   /* Tick a timer.  returns false if disabled or running. Returns true if timer expired */
   bool tick() {
     if (!enabled) {
       return false;
     }
-    /* Decrement counter if not zero */
     if (count > 0) {
       count--;
-    }
+    };
     /* Reset timer, return expired */
     if (count == 0) {
       count = reset;
@@ -189,14 +194,14 @@ constexpr uint32_t set_bits(uint32_t v) {
   return n;
 }
 
-constexpr bool testbit(int val, int bit) {
+constexpr bool testbit(auto val, int bit) {
   return (val >> bit) & 1;
 }
 
 struct irq_t {
   const char *name = "";
-  uint32_t en;  // ier.irq enabled
-  uint32_t sts; // icr.irq requested
+  uint32_t en = 0;  // ier.irq enabled
+  uint32_t sts = 0; // icr.irq requested
 
   /* Enable/disable IRQ line */
   void enable(const uint32_t mask, const bool ben) {

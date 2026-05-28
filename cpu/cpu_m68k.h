@@ -7,7 +7,12 @@
 #include <setjmp.h>
 #include <time.h>
 
-
+int csrc[16], cdst[16];
+ 
+#define Assert(x) do { if (!(x)) { printf("assertion failed : %s %s\n", __FUNCTION__, #x); assert(x); }}  while(0);
+ 
+#define ta(a,b) (((T_ ## a) << 8) + (T_ ## b))
+ 
 #define Assert(x) do { if (!(x)) { printf("assertion failed : %s %s\n", __FUNCTION__, #x); assert(x); }}  while(0);
 
 static bool m68k_trap(bool cond, int n);
@@ -40,7 +45,10 @@ std::map<uint32_t, std::string> rmap;
 #define ta(a,b) (((T_ ## a) << 8) + (T_ ## b))
 
 static uint32_t ctick;
-
+static uint32_t eatick;
+static uint32_t _TR(int cyc, int rd=0, int wr=0) {
+  return (cyc << 8) + (rd << 4) + wr;
+};
 static void TR(int cyc, int rd=0, int wr=0) {
   ctick += (cyc << 8) + (rd << 4) + wr;
 };
@@ -153,6 +161,16 @@ static char eamap[] = {
   EA_off_16, EA_off_32, EA_d16_PC, EA_Xn8_PC, EA_imm_sz, None,      None,      None,
 };
 
+// FC012
+// __000 rsvd
+// __001 user data
+// __010 user code
+// __011 rsvd
+// __100 rsvd
+// __101 super data
+// __110 super code
+// __111 cpu
+
 int countTime(const char *s, int sz, int ew=-1, int el=-1, const char *lbl="") {
   char ch;
   int cyc=0,rd=0,wr=0;
@@ -198,36 +216,6 @@ int countTime(const char *s, int sz, int ew=-1, int el=-1, const char *lbl="") {
   }
   return ct;
 }
-
-void ea_decode(uint16_t op, int size, int arg) {
-  // 80=dy       10.000.000 0 ext,swap,dbcc,sbcd,subx,abcd,exg,addx,shifts
-  // 88=ay       10.001.000 0 link,unlk,moveusp
-  // 90=(ay)     10.010.000 0
-  // 98=(ay)+    10.011.000 0 cmpm
-  // a0=-(ay)    10.100.000 0 sbcd,subx,abcd,addx
-  // a8=(ay,d16) 10.101.000 1 movep
-  // b0=(ay,xn)  10.110.000 1 
-  // b8=w        10.111.000 1
-  // b9=l        10.111.001 2
-  // ba=(pc,d16) 10.111.010 1 dbcc
-  // bb=(pc,xn)  10.111.011 1
-  // bc=imm      10.111.100 ? ori,andi,subi,addi,eori,cmpi,btst,bchg,bclr,bset,btst,link
-  // bf=EA       10.111.111 ? xxx
-
-  // c0=dx       11.000.000 0 many
-  // c8=ax       11.001.000 0 movea,lea,suba,cmpa,exp,adda
-  // d0=(ax)     11.010.000 0
-  // d8=(ax)+    11.011.000 0 cmpm
-  // e0=-(ax)    11.100.000 0 sbcd,subx,abcd,addx
-  // e8=(ax,d16) 11.101.000 1
-  // f0=(ax,xn)  11.110.000 1
-  // f8=w        11.111.000 1
-  // f9=w        11.111.001 2
-  // fa=(pc,d16) 11.111.010 1
-  // fb=(pc,xn)  11.111.011 1
-  // fc=imm      11.111.100 ?
-  // ff=EA2      11.111.111 ? xxx
-};
 
 enum {
   VECTOR_0 = 0,
@@ -468,6 +456,9 @@ static void m68k_setpc(uint32_t npc, bool call, const char *lbl)
   if (npc & 1) {
     PC = npc - 2;
     printf("BAD PC: %.8x\n", npc);
+    // super code vs user code
+    // 0111.1110 sf
+    // 0111.1010 user
     m68k_trapa(true, VECTOR_ADDRESS_ERROR, npc, IR[0], Sf ? 0x7e : 0x7a, "setpc");
     longjmp(trapjmp, 0xdeadbee0);
   }
@@ -603,7 +594,7 @@ static bool m68k_trapa(bool cond, int n, uint32_t addr, int ir, int code, const 
     return false;
   
   /* set supervisor mode: PC is saved on Supervisor stack */
-  printf("TRAPA: %x\n", n);
+  printf("TRAPA: %x PC:%.8x/%.8x addr:%.8x %.4x %.2x %s\n", n, SPC, PC, addr, ir, code, lbl);
   _m68k_setsr((tsr & 0x071F) | 0x2000);
   cpu_push32(PC - 2);
   cpu_push16(tsr);
@@ -1535,23 +1526,6 @@ static void m68k_movep(instr_t& i, uint32_t& Dn, const char *f)
   }
 }
 
-/* movem <reglist>, ea
- * movem ea, <reglist>
- *
- *           r>m m>r
- *  dn       -   -
- *  an       -   -
- *  (an)     y   y
- *  (an)+    -   y
- *  -(an)    y   -
- *  (an,d16) y   y
- *  (an,xn)  y   y
- *  w        y   y
- *  l        y   y
- *  (pc,d16) -   -
- *  (pc,xn)  -   -
- *  imm      -   -
- */
 template <int mode>
 static void m68k_movem(instr_t& i, uint32_t list, const char *f)
 {
@@ -1786,10 +1760,10 @@ static void m68k_lsl(instr_t& i, uint32_t src1, uint32_t src2)
 }
 
 /* X = last bit shifted out, n/a if count == 0
+ * C = last bit shifted out, n/a if count == 0
  * N = msb of result
  * Z = result = 0
  * V = msb changed anytime, else clear
- * C = last bit shifted out, n/a if count == 0
  */
 static void m68k_asr(instr_t& i, uint32_t src1, uint32_t src2)
 {
@@ -1966,10 +1940,10 @@ opcode_t optab[] = {
   o("0000.ddd.101.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Dx_EA,    EA,   "bchg    D%x, %ea",      { m68k_bchg(i, SRC, Dx); }),
   o("0000.ddd.110.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Dx_EA,    EA,   "bclr    D%x, %ea",      { m68k_bclr(i, SRC, Dx); }),
   o("0000.ddd.111.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Dx_EA,    EA,   "bset    D%x, %ea",      { m68k_bset(i, SRC, Dx); }),
-  o("0000.ddd.100.001.aaa", "_x__________", "______", "------------", Word, Ay16_Dx,  None, "movep.w %ea, D%x",      { m68k_movep<0>(i, Dx, "memreg.w"); }),
-  o("0000.ddd.101.001.aaa", "_x__________", "______", "------------", Long, Ay16_Dx,  None, "movep.l %ea, D%x",      { m68k_movep<1>(i, Dx, "memreg.l"); }),
-  o("0000.ddd.110.001.aaa", "_x__________", "______", "------------", Word, Ay16_Dx,  None, "movep.w D%x, %ea",      { m68k_movep<2>(i, Dx, "regmem.w"); }),
-  o("0000.ddd.111.001.aaa", "_x__________", "______", "------------", Long, Ay16_Dx,  None, "movep.l D%x, %ea",      { m68k_movep<3>(i, Dx, "regmem.l"); }),
+  o("0000.ddd.100.001.aaa", "_x__________", "______", "------------", Word, Ay16_Dx,  Dx,   "movep.w %ea, D%x",      { m68k_movep<0>(i, Dx, "memreg.w"); }),
+  o("0000.ddd.101.001.aaa", "_x__________", "______", "------------", Long, Ay16_Dx,  Dx,   "movep.l %ea, D%x",      { m68k_movep<1>(i, Dx, "memreg.l"); }),
+  o("0000.ddd.110.001.aaa", "_x__________", "______", "------------", Word, Ay16_Dx,  Dx,   "movep.w D%x, %ea",      { m68k_movep<2>(i, Dx, "regmem.w"); }),
+  o("0000.ddd.111.001.aaa", "_x__________", "______", "------------", Long, Ay16_Dx,  Dx,   "movep.l D%x, %ea",      { m68k_movep<3>(i, Dx, "regmem.l"); }),
 
   o("0010.aaa.001.mmm.yyy", "111111111111", "______", "------------", Long, EA_Ax,    Ax,   "movea.l %ea, A%x",      { m68k_mov<uint32_t>(i, SRC, false); }),
   o("0011.aaa.001.mmm.yyy", "111111111111", "______", "------------", Word, EA_Ax,    Ax,   "movea.w %ea, A%x",      { m68k_mov<int16_t>(i,  SRC, false); }),
@@ -1980,7 +1954,7 @@ opcode_t optab[] = {
   o("0100.000.011.mmm.yyy", "1_1111111___", "______", "------------", Word, SR_EA,    EA,   "move.w  SR, %ea",       { m68k_mov<uint32_t>(i, cpu_getflags(), false); }),
   o("0100.010.011.mmm.yyy", "1_1111111111", "______", "E.NNp-------", Word, EA_SR,    SR,   "move.b  %ea, CCR",      { m68k_setsr(SRC, Byte); }),
   o("0100.011.011.mmm.yyy", "1_1111111111", "S_____", "E.NNp-------", Word, EA_SR,    SR,   "move.w  %ea, SR",       { m68k_setsr(SRC, Word); }),
-  o("0100.000.0ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  EA,       None, "negx%s  %ea",           { m68k_sub(i, 0, SRC, Xf, _XNzVC); }), // sub
+  o("0100.000.0ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  EA,       None, "negx%s  %ea",           { m68k_sub(i, 0, SRC, Xf, _XNzVC); }),
   o("0100.001.0ss.mmm.yyy", "1_1111111___", "__0100", "------------", Any,  EA,       None, "clr%s   %ea",           { m68k_mov<uint32_t>(i, 0); }),
   o("0100.010.0ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  EA,       None, "neg%s   %ea",           { m68k_sub(i, 0, SRC, 0, _XNZVC); }),
   o("0100.011.0ss.mmm.yyy", "1_1111111___", "__NZ00", "------------", Any,  EA,       None, "not%s   %ea",           { m68k_mov<uint32_t>(i, ~SRC); }),
@@ -2187,6 +2161,30 @@ void testtiming() {
 }
 
 // ffff.xxx.-ss.mmm.yyy
+const char *an(int n) {
+  switch(n) {
+  case 0x00: return "None";
+  case 0x40: return "Dy";
+  case 0x41: return "Ay";
+  case 0x43: return "iAy";
+  case 0x44: return "dAy";
+  case 0x45: return "Ay16";
+  case 0x4b: return "Imm";
+  case 0x7f: return "EA";
+
+  case 0x80: return "Dx";
+  case 0x81: return "Ax";
+  case 0x83: return "iAx";
+  case 0x84: return "dAx";
+  case 0xff: return "DST";
+
+  case 0x50: return "q3";
+  case 0x51: return "q8";
+  case 0x54: return "SR";
+  }
+  return "xxx";
+};
+
 void gentbl()
 {
   opcode_t *ot;
@@ -2196,7 +2194,11 @@ void gentbl()
     uint16_t mask = ot->opbit_mask;
     uint16_t val  = ot->opbit_val;
 
-    printf("%.4x %.4x %.8x %.4x %.4x %s\n", mask, val, ot->arg0, ot->eabit_src, ot->eabit_dst, ot->mnem);
+    printf("%.4x|%.4x|%x|%.4x|%.4x|%-4s|%-4s|%s\n", mask, val,
+	   ot->size, ot->eabit_src, ot->eabit_dst,
+	   an((ot->arg0 >> 8) & 0xff),
+	   an(ot->arg0 & 0xff),
+	   ot->mnem);
     for (int op = 0; op < 65536; op++) {
       if ((op & mask) != val)
 	continue;
@@ -2285,7 +2287,7 @@ uint32_t cpu_fetch(const int size, const char *lbl) {
 
 /* Generic cpu read/write */
 uint32_t cpu_read(uint32_t addr, int size) {
-  m68k_check_address(addr, size, 0x15, "read");
+  m68k_check_address(addr, size, Sf ? 0x15 : 0x11, "read");
   switch (size) {
   case Byte: TR(4,1,0); return cpu_read8(addr);
   case Word: TR(4,1,0); return cpu_read16(addr);
@@ -2296,7 +2298,7 @@ uint32_t cpu_read(uint32_t addr, int size) {
 }
 
 void cpu_write(uint32_t addr, uint32_t val, int size) {
-  m68k_check_address(addr, size, 0x15, "write");
+  m68k_check_address(addr, size, Sf ? 0x05 : 0x01, "write");
   switch(size) {
   case Byte: TR(4,0,1); cpu_write8(addr, val); break;
   case Word: TR(4,0,1); cpu_write16(addr, val); break;
@@ -2309,7 +2311,7 @@ void cpu_write(uint32_t addr, uint32_t val, int size) {
 void cpu_push16(uint16_t v) {
   uint32_t addr = sp_dec(2);
   
-  printf("push: %x %x\n", addr, v);
+  printf("push16: %x %x\n", addr, v);
   cpu_write16(addr, v, dstk::STACK);
 }
 
@@ -2320,7 +2322,7 @@ uint16_t cpu_pop16() {
 void cpu_push32(uint32_t v) {
   uint32_t addr = sp_dec(4);
   
-  printf("push: %x %x\n", addr, v);
+  printf("push32: %x %x\n", addr, v);
   cpu_write32(addr, v, dstk::STACK);
 }
 

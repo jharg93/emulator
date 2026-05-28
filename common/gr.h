@@ -14,6 +14,14 @@
 #endif
 #endif
 
+struct pixbuf {
+  int clr  = -1;
+  int pclr = 0;
+  int pri  = 0;
+};
+
+void plot(pixbuf&, int pri, int clr, int pclr);
+
 /* Standard color definitions for a pixel and palette */
 typedef uint32_t color;
 struct palclr {
@@ -102,10 +110,10 @@ class Screen {
   int     width, height, th, tw;
   int     tx = 20, ty = 20;
   int     xs = 1, ys = 1;
-  int     KeyState[256] = { 0 };
+  int     keyState[256] = { 0 };
   int     clrmode;
   int     mouse_x, mouse_y, mouse_btn;
-  
+
 #ifdef _SDL
   SDL_Joystick *joy = NULL;
 #endif
@@ -145,9 +153,9 @@ class Screen {
   bool key(int ch, bool clr = false) {
     if (ch >= 256)
       return false;
-    int k = KeyState[ch];
+    int k = keyState[ch];
     if (clr && k)
-      KeyState[ch] = 0;
+      keyState[ch] = 0;
     return k;
   };
   int getmouse(int&x, int& y);

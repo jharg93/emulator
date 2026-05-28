@@ -85,7 +85,9 @@ dmachan_t *dmas = (dmachan_t *)&ioreg[DMABASE];
 int run_dma(int chan) {
   uint32_t src, incr, mode, dir;
 
-  /* Check if we are active */
+  /* Check if we are active
+   * dpcr |-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|
+   */
   if (((dpcr >> (4 * chan)) & 0x8) == 0)
     return 0;
   if ((dmas[chan].chcr & D24) == 0)
@@ -187,7 +189,7 @@ enum {
   DMA_START  = 0x00801080,
   DMA_END    = 0x008010fc,
 
-  TIMER_START= 0x00801000,
+  TIMER_START= 0x00801100,
   TIMER_END  = 0x0080112f,
 
   CDROM_START= 0x00801800,
@@ -200,7 +202,7 @@ enum {
   MDEC_END   = 0x00801024,
 
   SPU_START  = 0x00801c00,
-  SPU_END    = 0x00801dff,
+  SPU_END    = 0x00801eff,
   
   ROM_START  = 0x00C00000,
   ROM_END    = 0x00C7FFFF,
@@ -363,9 +365,16 @@ struct gte_t {
   int32_t   &LZCS = *(int32_t *)&copr[2][30];
   int32_t   &LZCR = *(int32_t *)&copr[2][31];
 
+  // rotation matrix
+  // 16-bits
+  //  1 bit sign
+  //  3 bit integer
+  //  12 bit fraction
   mtx3x3    &ROT   = *(mtx3x3 *)&copr[2][32];  // ||000|xxx||xxx|xxx||xxx|xxx||xxx|xxx||xxx|xxx||
-  vec3s32   &TRANS = *(vec3s32 *)&copr[2][37];
+  vec3s32   &TRANS = *(vec3s32 *)&copr[2][37]; // ||xxx|xxx||yyy|yyy||zzz|zzz||
+  // light matrix
   mtx3x3    &LIGHT = *(mtx3x3 *)&copr[2][40];  // ||000|xxx||xxx|xxx||xxx|xxx||xxx|xxx||xxx|xxx||
+  // light color matrix
   mtx3x3    &COLOR = *(mtx3x3 *)&copr[2][48];  // ||000|xxx||xxx|xxx||xxx|xxx||xxx|xxx||xxx|xxx||
 };
 
@@ -425,7 +434,8 @@ int gtecmd(gte_t *g, int cmd)
   int16_t &sy1 = g->S1.v[1];
   int16_t &sx2 = g->S2.v[0];
   int16_t &sy2 = g->S2.v[1];
-  
+
+  printf("GTECMD: %d\n", cmd);
   switch(cmd) {
   case 0x01: // rtps
     break;
@@ -1252,9 +1262,10 @@ struct gpu_t : public crtc_t {
     }
   }
   void fillrect_flat(Rect dst, Color c) {
+    auto clr = c.getcolor();
     for (int y = 0; y < dst.h; y++) {
       for (int x = 0; x < dst.w; x++) {
-	vram_setpix(x, y, c.getcolor());
+	vram_setpix(x, y, clr);
       }
     }
   };
@@ -1353,7 +1364,6 @@ struct gpu_t : public crtc_t {
     int min_y = std::min({v[0].y, v[1].y, v[2].y});
     int max_x = std::max({v[0].x, v[1].x, v[2].x});
     int max_y = std::max({v[0].y, v[1].y, v[2].y});
-
     for (p.y = min_y; p.y <= max_y; p.y++) {
       for (p.x = min_x; p.x <= max_x; p.x++) {
 	float w0 = edge(v[1], v[2], p) / area;
@@ -1361,7 +1371,10 @@ struct gpu_t : public crtc_t {
 	float w2 = edge(v[0], v[1], p) / area;
 	if (TL(w0,v[1],v[2]) && TL(w1,v[2],v[0]) && TL(w2,v[0],v[1])) {
 	  Color nc = c[0];
-	  if (cmd & ATTR_SHADED) {
+	  if (noclr == 2) {
+	    nc = ixc;
+	  }
+	  else if (cmd & ATTR_SHADED) {
 	    nc = (c[0] * w0) + (c[1] * w1) + (c[2] * w2);
 	  }
 	  if (cmd & ATTR_TEXTURE) {
@@ -1376,7 +1389,7 @@ struct gpu_t : public crtc_t {
 	  if (transp) {
 	    nc = blend(nc, p.x, p.y, 0);
 	  }
-	  if (noclr) {
+	  if (noclr==1) {
 	    nc = ixc;
 	  }
 	  vram_setpix(p.x, p.y, nc.getcolor());
@@ -1620,8 +1633,14 @@ struct gpu_t : public crtc_t {
       printf(" GP0_CMD(%.2x.%.6x) : len=%d %s\n", cmd, data, cmd_len, kvlookup(gp0, cmd, "???"));
     }
     else if (cmd == GP0_COPY) {
-      vram_setpix(bltRect.x + bltXY.x + 0, bltRect.y + bltXY.y, BGRRGB(data & 0xffff));
-      vram_setpix(bltRect.x + bltXY.x + 1, bltRect.y + bltXY.y, BGRRGB(data >> 16));
+      if (dcd) {
+	vram_setpix(bltRect.x + bltXY.x + 0, bltRect.y + bltXY.y, data & 0xffff);
+	vram_setpix(bltRect.x + bltXY.x + 1, bltRect.y + bltXY.y, data >> 16);
+      }
+      else {
+	vram_setpix(bltRect.x + bltXY.x + 0, bltRect.y + bltXY.y, BGRRGB(data & 0xffff));
+	vram_setpix(bltRect.x + bltXY.x + 1, bltRect.y + bltXY.y, BGRRGB(data >> 16));
+      }
       if (vramincr(2) < 0) {
 	cmd = GP0_NONE;
       }
@@ -1945,7 +1964,7 @@ void gpu_t::drawgpu() {
   float fps;
 
   if (screen->key('r', true)) {
-    noclr ^= 1;
+    noclr = (noclr+1) & 3;
   }
   setkeystate('i', THPAD_UP);
   setkeystate('k', THPAD_DOWN);
@@ -1963,16 +1982,31 @@ void gpu_t::drawgpu() {
   now = time(NULL);
   fps = (float)frame / (now - fpstime);
   for (int y = 0; y < 1024; y++) {
+    int ci = 0;
     for (int x = 0; x < 1024; x++) {
-      screen->setpixel(x, y, gpu.vram_getpix(x, y));
+      if (dcd) {
+	Color cn(gpu.vram_getpix(ci++, y),
+		 gpu.vram_getpix(ci++, y),
+		 gpu.vram_getpix(ci++, y));
+	screen->setpixel(x,   y, cn.getcolor());
+	screen->setpixel(x+1, y, cn.getcolor());
+	if (x >= 1024*2/3) {
+	  break;
+	}
+      }
+      else {
+	screen->setpixel(x, y, gpu.vram_getpix(x, y));
+      }
     }
+    ci = 0;
   }
+  printf("frame..\n");
   screen->scrtext(0, screen->height + 5, MKRGB(255,255,0),
 		  "frame:%d fps:%.2f PC:%.8x",
 		  frame, fps, SPC);
 
-  screen->scrbox(clip_ul.x,clip_ul.y,clip_lr.x,clip_lr.y, MKRGB(0,255,0));
-  screen->scrbox(0,0,512,256, MKRGB(3,252,182));
+  //screen->scrbox(clip_ul.x,clip_ul.y,clip_lr.x,clip_lr.y, MKRGB(0,255,0));
+  //screen->scrbox(0,0,512,256, MKRGB(3,252,182));
   screen->draw();
   frame++;
 }
@@ -2055,26 +2089,25 @@ int dmaio(void *arg, uint32_t addr, int mode, iodata_t& data)
   return 0;
 }
 
-
-int spuio(void *arg, uint32_t addr, int mode, iodata_t& data)
+static int spuio(void *arg, uint32_t addr, int mode, iodata_t& data)
 {
   printf("@%.8x.%c: I/O: SPU               %.8x\n", addr, mode & 0xFF, data);
   return 0;
 }
 
-int mdecio(void *arg, uint32_t addr, int mode, iodata_t& data)
+static int mdecio(void *arg, uint32_t addr, int mode, iodata_t& data)
 {
   printf("@%.8x.%c: I/O: MDEC              %.8x\n", addr, mode & 0xFF, data);
   return 0;
 }
 
-int cdrio(void *arg, uint32_t addr, int mode, iodata_t& data)
+static int cdrio(void *arg, uint32_t addr, int mode, iodata_t& data)
 {
   printf("@%.8x.%c: I/O: CDROM             %.8x\n", addr, mode & 0xFF, data);
   return 0;
 }
 
-int timerio(void *arg, uint32_t addr, int mode, iodata_t& data)
+static int timerio(void *arg, uint32_t addr, int mode, iodata_t& data)
 {
   printf("@%.8x.%c: I/O: TIMER             %.8x\n", addr, mode & 0xFF, data);
   return 0;
@@ -2134,7 +2167,6 @@ int cpu_step(mips_cpu *c)
 {
   uint32_t *regs = c->regs;
   uint32_t *jmpslot = c->jmpslot;
-  
   static uint32_t ctr;
 
   gpu.Tick();

@@ -12,7 +12,7 @@ uint8_t WEAK cpu_read8(const uint32_t off, int type) {
   return 0;
 }
 
-void WEAK cpu_write8(const uint32_t off, uint8_t v, int type) {
+void WEAK cpu_write8(const uint32_t off, const uint8_t v, int type) {
   assert(0);
 }
 
@@ -28,12 +28,12 @@ uint16_t WEAK cpu_read16be(const uint32_t off, int type) {
   return (hi << 8) + lo;
 }
 
-void WEAK cpu_write16(const uint32_t off, uint16_t v, int type) {
+void WEAK cpu_write16(const uint32_t off, const uint16_t v, int type) {
   cpu_write8(off+0, v, type);
   cpu_write8(off+1, v>>8, type);
 }
 
-void WEAK cpu_write16be(const uint32_t off, uint16_t v, int type) {
+void WEAK cpu_write16be(const uint32_t off, const uint16_t v, int type) {
   cpu_write8(off+1, v, type);
   cpu_write8(off+0, v>>8, type);
 }

@@ -36,6 +36,7 @@
 #include "bus.h"
 #include "audio.h"
 #include "c64.h"
+#include <array>
 
 extern int SPC;
 extern int trace;
@@ -110,19 +111,14 @@ extern uint64_t totcyc;
 
 static constexpr int sector_size = 256;
 
-struct d64TrackOffset {
-  int base[41] = {};
-  int operator[](int n) const {
-    return base[n];
-  };
-};
+typedef std::array<int, 41> d64TrackOffset; 
 
 constexpr auto mktrackoff() {
   d64TrackOffset track{};
   int off = 0;
   
   for (int i = 1; i < 41; i++) {
-    track.base[i] = off * sector_size;
+    track[i] = off * sector_size;
     if      (i <= 17)  off += 21;
     else if (i <= 24)  off += 19;
     else if (i <= 30)  off += 18;
@@ -133,12 +129,9 @@ constexpr auto mktrackoff() {
     
 static constexpr auto track_offset = mktrackoff();
 
-static wchar_t pski1[96] =
-  L" !\"#$%^\'()*+,-./"
-  "0123456789:;<=>?"
-  "@ABCDEFGHIJKLMNO"
-  "PQRSTUVWXYZ[£]↑←"
-  ;
+static wchar_t pski1[] =
+  L" !\"#$%^\'()*+,-./0123456789:;<=>?"
+  "@ABCDEFGHIJKLMNOPQRSTUVWXYZ[£]↑←";
 
 // http://unusedino.de/ec64/technical/formats/d64.html
 struct d64file {
@@ -155,12 +148,13 @@ struct d64file {
   uint8_t  sz_lo;     // 1Eh
   uint8_t  sz_hi;     // 1Fh
   wchar_t petascii(char ch) {
-    if (ch < 0x20) return '?';
-    if (ch < 0x5f) return pski1[ch - 0x20];
+    if (ch >= 0x20 && ch < 0x5f) {
+      return pski1[ch - 0x20];
+    }
     return '?';
   };
-  const wchar_t *getname() const {
-    static wchar_t s[32];
+  const std::string getname() const {
+    std::string s{};
     for (int i = 0; i < 16; i++) {
       if (name[i] == 0xA0)
 	break;
@@ -183,8 +177,9 @@ struct d64 {
     data = loadrom(file, size);
     lsdir();
   };
+  // load prg file from file ptr
   auto load_prg(d64file *f) {
-    std::vector<uint8_t> fd;
+    std::vector<uint8_t> data{};
     int track = f->f_track;
     int sector = f->f_sector;
     while (track) {
@@ -198,9 +193,9 @@ struct d64 {
       track = sec[0];
       sector = sec[1];
       int bytes = (track == 0) ? sector : 254;
-      fd.insert(fd.end(), sec + 2, sec + 2 + bytes);
+      data.insert(data.end(), sec + 2, sec + 2 + bytes);
     }
-    return fd;
+    return data;
   }
   void lsdir() {
     int track = 18;
@@ -214,10 +209,10 @@ struct d64 {
       printf("------\n");
       for (int i = 0; i < 8; i++) {
 	int ft = f[i].type & 0xF;
-	printf("%.2x %.2x|%.2x %.2x %.2x|[%s]%ls\n",
+	printf("%.2x %.2x|%.2x %.2x %.2x|[%s]%s\n",
 	       f[i].d_track, f[i].d_sector,
 	       f[i].type,f[i].f_track, f[i].f_sector,
-	       ftype[ft],f[i].getname());
+	       ftype[ft],f[i].getname().c_str());
 	if (ft == 0x2) {
 	  files.push_back(&f[i]);
 	}
@@ -1344,8 +1339,8 @@ void c64::load(const char *romfile)
   exgame = 0x3 << 3;
 
   /* Setup memory handlers */
-  register_handler(0x0000, 0x0001, 0xFFFF, zpgio,  this, _RW, "REGIO");
-  register_handler(0x0002, 0x7FFF, 0xFFFF, memio,  ram,  _RW, "RAM");
+  register_handler(0x0000, 0x0002, 0xFFFF, zpgio,  this, _RW, "REGIO");
+  register_handler(0x0003, 0x7FFF, 0xFFFF, memio,  ram,  _RW, "RAM");
   register_handler(0x8000, 0x9FFF, 0x1FFF, bank8x, this, _RW, "RAM:ROMLO");
   register_handler(0xA000, 0xBFFF, 0x1FFF, bankAx, this, _RW, "RAM:ROMHI:BASIC");
   register_handler(0xC000, 0xCFFF, 0xFFFF, memio,  ram,  _RW, "RAM");
@@ -1366,6 +1361,7 @@ void c64::load(const char *romfile)
       printf(" game  : %d\n",  cartrom[0x19]);
       exgame = ((cartrom[0x18] & 1) << 4) | ((cartrom[0x19] & 1) << 3);
 
+      // init 8/A/E bank areas
       b8.init(256, "8000");
       ba.init(256, "A000");
       be.init(256, "E000");
@@ -1388,7 +1384,7 @@ void c64::load(const char *romfile)
 
 	cptr = cartrom + off + 0x10;
 	if (addr == 0x8000 && size == 0x2000) {
-	  printf(":set8 %d\n", bank);
+	  printf(":set8.2000 %d\n", bank);
 	  b8.banks[bank] = cptr;
 	}
 	else if (addr == 0x8000 && size == 0x1000) {
@@ -1397,11 +1393,11 @@ void c64::load(const char *romfile)
 	  b8.banks[1] = cptr;
 	}
 	else if (addr == 0xA000 && size == 0x2000) {
-	  printf(":seta %d\n", bank);
+	  printf(":seta.2000 %d\n", bank);
 	  ba.banks[bank] = cptr;
 	}
 	else if (addr == 0x8000 && size == 0x4000) {
-	  printf(":set8a %d\n", bank);
+	  printf(":set8.4000 %d\n", bank);
 	  b8.banks[bank] = cptr;
 	  ba.banks[bank] = cptr + 0x2000;
 	}
@@ -1419,7 +1415,6 @@ void c64::load(const char *romfile)
   setmapreg(this, 0xE7);
   ctrl1 = 0x1B;
   vic_irq.en = VIC_IRQ_RASTER;
-
   vic_irq.name = "vic";
 
   cia1.init(1, &ioregs[0xc00], "cia1");
@@ -1753,7 +1748,7 @@ void getkey(c64 *c)
     c->key_row[i] = 0;
 
   c->joystate[0] = 0;
-#if 1
+#if 0
   if (screen->key('a', true)) {
     c->joystate[0] |= JOY_LEFT;
   }
@@ -1934,6 +1929,111 @@ void c64::drawsprite(int n, int y) {
 /* Draw row of 8 raster line */
 void c64::drawline(int y)
 {
+#if 1
+  int clr[4], ch, smode;
+  int sx, sy, cb, sb, bpp, fy, cy;
+  uint8_t bmp;
+
+  auto spix = [&](int x, int c, int pri = 0) {
+    rline[x] = clr[c];
+  };
+  
+  smode = scrmode();
+
+  cy = (y / 8);
+  fy = (y % 8);
+  
+  /* Get Memory pointers, screen, chrbase */
+  sb = (memptr & 0xF0) << 6;
+  cb = (memptr & 0x0E) << 10;
+  if (smode == mode_bitmap || smode == mode_mcbitmap) {
+    cb = (memptr & 0x08) << 10;
+  }
+
+  screen_ram = &ram[vicbase + sb];
+  sprite_ptr = &screen_ram[0x3F8];
+  chrbase = vicbase + cb;
+
+  /* Get XSCROLL/YSCROLL */
+  sx = XSCROLL();
+  sy = YSCROLL();
+  for (int x = 0; x < 40; x++) {
+    const int addr = (cy * 40) + x;
+    const int bg0 = bg_clr[0] & 0xF;
+    
+    bpp = 1;
+    ch = screen_ram[addr];
+    if (smode == mode_char) {
+      /* Char mode
+       * 2 colors from BG0.lo, Color RAM.lo 
+       * bitmap = &char_rom[ch * 8 + (y % 8)] */
+      clr[0] = bg0;
+      clr[1] = color_ram[addr] & 0xF;
+    }
+    else if (smode == mode_mcchar) {
+      /* Multi-color Char mode
+       * 4 Colors from BG0.lo, BG1.lo, BG2.lo, Color RAM.lo 
+       * Values 8-15 = multicolor, values 0-7 = standard
+       * bitmap = &char_rom[ch * 8 + (y % 8)]
+       */
+      if ((color_ram[addr] & 0x8) == 0x8) {
+	clr[0] = bg0;
+	clr[1] = bg_clr[1] & 0xF;
+	clr[2] = bg_clr[2] & 0xF;
+	clr[3] = color_ram[addr] & 0x7;
+	bpp = 2;
+      }
+      else {
+	clr[0] = bg0;
+	clr[1] = color_ram[addr] & 0xF;
+      }
+    }
+    else if (smode == mode_extbg) {
+      /* Extended BG mode
+       * 2 colors, but background has 4 options
+       * upper bits of ch select which color, 
+       * bg0, bg1, bg2, bg3 but limits to only certain chars
+       * bitmap = &char_rom[(ch & 0x3F) * 8 + (y % 8)]
+       */
+      clr[0] = bg_clr[ch >> 6] & 0xF;
+      clr[1] = color_ram[addr] & 0xF;
+      ch = ch & 0x3f;
+    }
+    else if (smode == mode_bitmap) {
+      /* Bitmap mode
+       * 2 Colors from Screen RAM[hi,lo]: 2000-3FFF */
+      clr[0] = (ch >> 0) & 0xF;
+      clr[1] = (ch >> 4) & 0xF;
+      ch = addr;
+    }
+    else if (smode == mode_mcbitmap) {
+      /* Multi-color bitmap mode
+       * 4 Colors from BG0, Screen RAM[hi,lo], Color RAM */
+      clr[0] = bg0;
+      clr[1] = (ch >> 4) & 0xF;
+      clr[2] = (ch >> 0) & 0xF;
+      clr[3] = color_ram[addr] & 0xF;
+      ch = addr;
+      bpp = 2;
+    }
+    bmp = vicram((ch * 8) + fy);
+    for (int i = 0; i < 8; i += bpp) {
+      int c;
+      
+      if (bpp == 1) {
+	c = (bmp >> 7) & 1;
+	spix(x * 8 + i + sx + 0, c);
+      }
+      else {
+	c = (bmp >> 6) & 3;
+	spix(x * 8 + i + sx + 0, c);
+	spix(x * 8 + i + sx + 1, c);
+      }
+      bmp <<= bpp;
+    }
+    ::drawline(screen, rline, 320, EX+sx, EY+y+sy, 0);
+  }
+#else
   int clr[4], ch, smode;
   int sx, sy, cb, sb, bpp;
   uint8_t bmp;
@@ -2016,6 +2116,7 @@ void c64::drawline(int y)
       drawtile(x*8+sx, y*8+sy, ch, bpp, clr);
     }
   }
+#endif
 }
 
 void c64::drawframe()
@@ -2146,17 +2247,16 @@ void c64::ppu_tick()
   }
   /* Row is Displayed video line */
   if (row >= 0 && row < 200) {
+    smode = scrmode();
     if ((row % 8) == 0) {
-      smode = scrmode();
       fprintf(stdout, "--- line %3d: %3d-%3d [%d,%d] raster:%d %s\n",
 	      scanline, row, row + 7, XSCROLL(), YSCROLL(), raster_irq, 
 	      scrmodes[smode]);
-      /* Draw line and sprite */
-      drawline(row / 8);
-      for (int i = 7; i >= 0; i--) {
-	drawsprite(i, row);
-      }
-      //draw line every 8-rows
+    }
+    /* Draw line and sprite */
+    drawline(row);
+    for (int i = 7; i >= 0; i--) {
+      drawsprite(i, row);
     }
   }
   /* Increase scanline, get next cycles */
@@ -2184,6 +2284,8 @@ void c64::ppu_tick()
   }
 }
 
+extern void dumpcfg(int noff, int *o, int base, int size);
+
 void c64::run(const char *prgfile)
 {
   palclr cpal[16];
@@ -2208,6 +2310,7 @@ void c64::run(const char *prgfile)
     prgaddr = get16(prg);
     prgsize = sz - 2;
     printf("prg: %p %.4x %x\n", prg, prgaddr, prgsize);
+    memcpy(&ram[prgaddr], prg + 2, prgsize);
   }
   cpu_reset(iPC);
   for(;;) {

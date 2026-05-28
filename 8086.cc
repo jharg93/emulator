@@ -265,9 +265,10 @@ enum CpuModel {
   i80386,
 };
 
-auto model = CpuModel::i8086;
+auto model = CpuModel::i80386;
 
 instr_t i;
+uint32_t& asize = i.asize;
 uint32_t& osize = i.osize;
 uint8_t&  mrr = i.mrr;
 uint32_t  mrr_imm;
@@ -300,6 +301,9 @@ union reg_t {
   uint16_t w;
   uint32_t d;
   uint64_t q;
+};
+
+struct segdesc_t {
 };
 
 struct flags_t {
@@ -407,7 +411,7 @@ const char *regname(const uint32_t k)
   const char *bn[] = { "al", "cl", "dl", "bl", "ah", "ch", "dh", "bh" };
   const char *wn[] = { "ax", "cx", "dx", "bx", "sp", "bp", "si", "di" };
   const char *dn[] = { "eax","ecx","edx","ebx","esp","ebp","esi","edi"};
-  const char *sn[] = { "es", "cs", "ss", "ds", "??", "??", "??", "??" };
+  const char *sn[] = { "es", "cs", "ss", "ds", "fs", "gs", "??", "??" };
   const int vv = (k & 7);
   
   switch (vsize(k, TYPE_MASK|SIZE_MASK)) {
@@ -585,6 +589,44 @@ struct x86 {
   uint8_t seq_idx,  seq_regs[16];
   uint8_t gr_idx,   gr_regs[16];
   uint8_t latch[4];
+
+  int vga_horizontalTotal() const {
+    return crtc_regs[0]+5;
+  };
+  int vga_endHorizontalDisplay() const {
+    return crtc_regs[1]+1;
+  };
+  int vga_startHorizontalBlanking() const {
+    return crtc_regs[2];
+  };
+  int vga_endHorizontalBlanking() const {
+    return (crtc_regs[3] & 0x1F) + ((crtc_regs[5] & 0x80) >> 2);
+  };
+  int vga_startHorizontalRetrace() const {
+    return crtc_regs[4];
+  };
+  int vga_endHorizontalRetrace() const {
+    return crtc_regs[5] & 0x1F;
+  };
+  int vga_verticalTotal() const {
+    return crtc_regs[6];
+  };
+  int vga_cursorStart() const {
+    return crtc_regs[0xa] & 0x1f;
+  };
+  int vga_cursorEnd() const {
+    return crtc_regs[0xb] & 0x1f;
+  };
+  int vga_cursorEnabled() const {
+    return (crtc_regs[0xa] & 0x20) != 0;
+  };
+  int vga_cursorLocation() const {
+    return (crtc_regs[0xe] << 8) + crtc_regs[0xf];
+  };
+  /* return address in 32-bits */
+  int vga_startAddress() const {
+    return (crtc_regs[0xc] << 8) + crtc_regs[0xd];
+  };
   
   uint8_t crtc_modesel;
   uint8_t crtc_colorsel;
@@ -995,16 +1037,15 @@ void drawtext(int cols, int rows, int border, uint32_t flags, const uint8_t *mem
  * |          |-+
  * +----------+
  *======================*/
-void drawplane(int width, int height, const uint8_t *mem, int (*pmap)(int p), int nplanes, int planestep)
+void drawplane(int width, int height, const uint8_t *mem, int (*palette)(int p), int nplanes, int planestep)
 {
   int pxl, clr;
+  int line[width];
 
-  scr->xs = 2;
   for (int y = 0; y < height; y++) {
-    int line[width];
     mem = genplane(line, width, mem, nplanes, planestep);
     for (int x = 0; x < width; x++) {
-      line[x] = pmap(line[x]);
+      line[x] = palette(line[x]);
     }
     drawline(scr, line, width, EX, EY + y, 0);
   }
@@ -1084,7 +1125,6 @@ void x86::drawscreen()
   int w = 0, h = 0, bpp = 0;
   static int blink;
 
-  crtc_changed = false;
   if (crtc_changed) {
     zprintf(" gr:Mode Select:          %x\n", crtc_modesel);
     switch(crtc_modesel & 0b10111) {
@@ -1242,6 +1282,7 @@ int i8237_t::io(void *arg, const uint32_t addr, int mode, iodata_t& val)
   i8237_t *d = (i8237_t *)arg;
   int ch;
 
+  printf("io:i8237 %x\n", addr);
   ch = (addr / 2);
   if (addr <= 7) {
     if (addr & 1) {
@@ -1306,6 +1347,7 @@ int i8253_t::io(void *arg, const uint32_t addr, int mode, iodata_t& val)
 {
   static uint8_t t = 0;
 
+  printf("io:i8253: %x\n", addr);
   /* 0x40 = channel 0 
    * 0x41 = channel 1
    * 0x42 = channel 2
@@ -1377,17 +1419,19 @@ int i8253_t::io(void *arg, const uint32_t addr, int mode, iodata_t& val)
  */
 int i8255_t::io(void *arg, const uint32_t addr, int mode, iodata_t& val) {
   memio(&kx, 0, mode, val);
+  printf("io:i8255 %x\n", addr);
   if (addr == 0x0061 && mode == 'w') {
     pcspkr.enabled = ((val & 3) == 3);
   }
   return 0;
 };
 
-/* i8259: PIT */
+/* i8259: PIC */
 int i8259_t::io(void *arg, const uint32_t addr, int mode, iodata_t& val)
 {
   i8259_t *c = (i8259_t *)arg;
   
+  printf("io:i8259 %x\n", addr);
   switch (addr) {
   case 0x20:
   case 0xA0:
@@ -1504,6 +1548,32 @@ opl2::opl2(bus_t *io, int port)
  * 03DA: PCJr VGA
  * 03DE:
  *
+ * CRTC registers
+ * +---+---+---+---+---+---+---+---+
+ * | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+ * +---+---+---+---+---+---+---+---+
+ * |     Horizontal Total          | 00h   # of char clocks per line (val = n-5)
+ * +---+---+---+---+---+---+---+---+
+ * |   End Horizontal Display      | 01h   # of char clocks (val = n-1)
+ * +---+---+---+---+---+---+---+---+
+ * |  Start Horizontal Blanking    | 02h   # of character clock
+ * +---+---+---+---+---+---+---+---+
+ * |ERA|  DES  |  End Horiz Blank  | 03h
+ * +---+---+---+---+---+---+---+---+
+ * |  Start Horizontal Retrace     | 04h
+ * +---+---+---+---+---+---+---+---+
+ * |EHB|HorSkew| End Horiz Retrace | 05h 
+ * +---+---+---+---+---+---+---+---+
+ * |    Vertical Total             | 06h   lower 8 bits
+ * +---+---+---+---+---+---+---+---+
+ * |VS9|VE9|VT9|LC8|SB8|VS8|VE8|VT8| 07h   Overflow
+ * +---+---+---+---+---+---+---+---+
+ * |   |bytepan|   preset rowscan  | 08h   preset row scan
+ * +---+---+---+---+---+---+---+---+
+ * |SD |LC9|SB9|  Maximum scan line| 09h   maximum scan line
+ * +---+---+---+---+---+---+---+---+
+ * +---+---+---+---+---+---+---+---+
+ * 
  * Graphics registers
  * +---+---+---+---+---+---+---+---+
  * | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
@@ -2205,6 +2275,11 @@ void x86::init()
   mb.register_handler(0xA0000, 0xBFFFF, 0x1FFFF, vidramio, vid, _RW, "VIDEO");
 
 #if 0
+  trace=3;
+  r = loadrom("pcbios/386bios.bin", romsz);
+  mb.register_handler(0xF0000, 0xFFFFF, 0xFFFF, memio, r, _RW, "386bios");
+  x86_reset(0xF000, 0xFFF0);
+#elif 0
   /* testing */
   r = loadrom("pcbios/new_bios.rom", romsz);
   mb.register_handler(0xF0000, 0xFFFFF, 0xFFFF, memio, r, _RW, "F0100");
@@ -3093,10 +3168,6 @@ static uint32_t x86_get(const arg_t& arg)
     return regs[arg & 7].w;
   case rES ... rs07:
     assert((arg & 7) <= rGS);
-    if (arg > rGS) {
-      printf("invalid segreg: %x\n", arg & 7);
-      return 0;
-    }
     return sregs[arg & 7];
   case Mb:
     return cpu_read8(mrr_base);
@@ -3270,7 +3341,6 @@ static void idiv8(arg_t q, arg_t r, int32_t a, int32_t b, int32_t m) {
 void x86_shiftop(int op, const arg_t& arg0, const arg_t& arg1) {
   const uint32_t msb_bit = ((arg0 & SIZE_MASK) == SIZE_BYTE) ? 0x80 : 0x8000;
   uint32_t v, count;
-  bool setflag = false;
   
   v = x86_get(arg0);
   count = x86_get(arg1) & 0x1F;
@@ -3304,29 +3374,32 @@ void x86_shiftop(int op, const arg_t& arg0, const arg_t& arg1) {
     break;
   case x86_shl:
   case x86_sal:
+    if (!count)
+      return;
     for (int i = 1; i <= count; i++) {
       v = rol(v, msb_bit, 0);
       Of = Cf ^ !!(v & msb_bit);
     }
-    setflag = count > 0;
     break;
   case x86_shr:
+    if (!count)
+      return;
     for (int i = 1; i <= count; i++) {
       Of = !!(v & msb_bit);
       v = ror(v, 0);
     }
-    setflag = count > 0;
     break;
   case x86_sar:
+    if (!count)
+      return;
     if (count == 1)
       Of = 0;
     for (int i = 1; i <= count; i++) {
       v = ror(v, v & msb_bit);
     }
-    setflag = count > 0;
     break;
   }
-  x86_set(arg0, v, setflag);
+  x86_set(arg0, v, true);
 }
 
 void x86_mathop(int op, const arg_t& arg0, const arg_t& arg1)
@@ -3472,7 +3545,7 @@ void x86_bcdop(int op, const arg_t& arg)
     break;
   case x86_aas:
     if (Af || (AL & 0x0F) > 9) {
-      AL = AL  - 0x06;
+      AL = AL - 0x06;
       AH = AH - 1;
       Af = 1;
       Cf = 1;
@@ -3654,6 +3727,8 @@ const char *x86_dis(uint8_t op, uint32_t a0, uint32_t a1, uint32_t a2)
   char *dst = dstr;
 
   src = opc.mnem;
+  strcpy(dst, src);
+#if 0
   if (pfx == PFX_REPNZ) {
     dst += snprintf(dst, 16, "repnz ");
   }
@@ -3664,10 +3739,9 @@ const char *x86_dis(uint8_t op, uint32_t a0, uint32_t a1, uint32_t a2)
 	replace(&src, "%grp2", &dst, "%-8s", grp2[ggg]) ||
 	replace(&src, "%grp3", &dst, "%-8s", grp3[ggg]) ||
 	replace(&src, "%grp4", &dst, "%-8s", grp4[ggg]) ||
-	replace(&src, "%grp5", &dst, "%-8s", grp5[ggg])))
-    {
-      dst += snprintf(dst, 16, "%-8s", src);
-    }
+	replace(&src, "%grp5", &dst, "%-8s", grp5[ggg]))) {
+    dst += snprintf(dst, 16, "%-8s", src);
+  }
   if (segpfx)  {
     dst += snprintf(dst, 16, "%s:", regname(segpfx));
   }
@@ -3683,6 +3757,7 @@ const char *x86_dis(uint8_t op, uint32_t a0, uint32_t a1, uint32_t a2)
     }
   }
   *dst = 0;
+#endif
   return dstr;
 }
 
@@ -3700,8 +3775,6 @@ void dd(uint8_t *a, uint8_t *b, int l)
 /* Load segment + base pointer (les, lds, etc) */
 static void x86_loadptr(arg_t seg, arg_t ofs)
 {
-  uint32_t addr = mrr_base;
-
   /* Size=16/32 */
   x86_set(ofs, cpu_read16(mrr_base + 0));
   x86_set(seg, cpu_readv(mrr_base + 2));
@@ -3723,8 +3796,8 @@ int cpu_exec(int op, int opfn, arg_t arg0, arg_t arg1, arg_t arg2)
 
   switch(opfn) {
   case x86_push:
-    if (arg0 == rvSP) {
-      /* 8086: 'push sp' pushes pre-decremented SP */
+    /* 8086: 'push sp' pushes pre-decremented SP */
+    if (model == CpuModel::i8086 && arg0 == rvSP) {
       cpu_push16(SP - 2);
       break;
     }
@@ -3942,7 +4015,7 @@ struct vmrtc {
 };
 
 /* VM code used by 8086 tiny bios */
-static void cpu_vm()
+static int cpu_vm()
 {
   int op;
   uint32_t base = 0;
@@ -3992,6 +4065,10 @@ static void cpu_vm()
     memcpy(&diskdata[BP * 512], &cpu.ram[base], AX);
     AL = 0;
   }
+  else {
+    return op;
+  }
+  return -1;
 }
 
 // cycles: https://www2.math.uni-wuppertal.de/~fpf/Uebungen/GdR-SS02/opcode_i.html
@@ -4004,7 +4081,7 @@ int cpu_step()
 {
   arg_t arg0, arg1, arg2;
   opcode_t opc;
-  int op;
+  int op, tmp;
   
   /* Decode opcode */
   cpu_setflags(eflags);
@@ -4013,6 +4090,8 @@ int cpu_step()
   segpfx = 0;
   mrr_seg = 0;
   mrr_base = 0;
+  osize = SIZE_WORD;
+  asize = SIZE_WORD;
   if (SPC < 1024*1024)
     visited[SPC] = 1;
 
@@ -4022,7 +4101,7 @@ int cpu_step()
     opcnt[op]++;
     if (op == 0x0f) {
       /* Tiny BIOS uses 0x0f byte as emulator trap */
-      cpu_vm();
+      tmp = cpu_vm();
       op = cpu_fetch8();
     }
 
@@ -4070,7 +4149,7 @@ int cpu_step()
   arg0 = getarg(opc.arg0, op);
   arg1 = getarg(opc.arg1, op);
   arg2 = getarg(opc.arg2, op);
-  trace = 0;
+  trace = 3;
   if (trace) {
     cpu_showregs();
     zprintf("%.4x:%.2x %s\n",
@@ -4327,6 +4406,9 @@ uint8_t *getdma(uint32_t addr) {
 #define PJSON
 #include "json/pjson.cc"
 
+void done_json() {
+};
+
 uint32_t ssr[10];
 struct rr_t rr[] = {
   { "ax", &regs[0].d },
@@ -4380,7 +4462,7 @@ int main(int argc, char *argv[])
   if (argc > 1 && !strcmp(argv[1], "-json")) {
     cpu.ram = new uint8_t[0xFFFFFF]{};
     mb.register_handler(0x00000, 0xFFFFFF, 0xFFFFFF, memio, cpu.ram, _RW, "RAMTEST");
-    read_json(argv[2], rr, cpu.ram, runjson);
+    //read_json(argv[2], rr, cpu.ram, runjson);
     exit(0);
   }
   for (int i = 0xf0000; i <= 0xfffff; i++) {

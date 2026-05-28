@@ -43,16 +43,6 @@ auto pclr = [](uint16_t *p, uint16_t mask, int mode = 0) {
   return clr;
  };
 
-auto pclrp = [](const uint16_t mask, const uint16_t a, const uint16_t b, const uint16_t c, const uint16_t d) {
-  int clr = 0;
-  
-  if (a & mask) clr |= 0x1;
-  if (b & mask) clr |= 0x2;
-  if (c & mask) clr |= 0x4;
-  if (d & mask) clr |= 0x8;
-  return clr;
- };
-
 /* de-amiga-os-120
 https://pastraiser.com/
 https://wandel.ca/homepage/execdis/
@@ -1252,6 +1242,14 @@ struct amiga : public bus_t, crtc_t, blitter_t {
   IOREG16(bplcon0, BPLCON0);
   IOREG16(bplcon1, BPLCON1);
   IOREG16(bplcon2, BPLCON2);
+  uint32_t bpl_prev[8];
+
+  int pf1shift() const {
+    return (bplcon1 >> 0) & 0xF;
+  };
+  int pf2shift() const {
+    return (bplcon1 >> 4) & 0xF;
+  };
 
   // return ioreg32 for bitplane pointer & data
   ioreg32 BPLxPTR(const int n) {
@@ -1400,12 +1398,14 @@ void cia_gettime(cia8250 *c)
   rtc = localtime(&now);
 }
 
+#if 0
 static const char *ciareg[] = {
   "pra",  "prb",  "ddra", "ddrb",
   "talo", "tahi", "tblo", "tbhi",
   "tod0", "tod1", "tod2", "irqsts",
   "sdr",  "irqen","cra",  "crb"
 };
+#endif
 
 void cia8250::show(const char *pfx) {
   printf("%-6s cia%c: pa:%.2x pb:%.2x da:%.2x db:%.2x ta:%.4x/%.8x tb:%.4x/%.8x tod:%.6x alrm:%.6x sdr:%.2x icr:%.2x[%.2x/%.2x] cra:%.2x crb:%.2x\n",
@@ -1469,7 +1469,6 @@ const char *bs(const char *fs, int bit) {
  */
 void cia8250::Setreg(int n, uint8_t val)
 {
-  //printf("%.8x cia%c: write    %s = %.2x\n",  SPC, id, ciareg[n], val);
   cia_t::setreg(n, val);
   if (n == PRA) {
     pra = val & 0x3f;
@@ -1489,7 +1488,6 @@ uint8_t cia8250::Getreg(int n)
     floppyState();
     v = pra;
   }
-  //printf("%.8x cia%c: read     %s = %.2x\n", SSPC, id, ciareg[n], v);
   return v;
 }
 
@@ -2225,9 +2223,16 @@ void amiga::renderbg(int y, int count, int dmapos)
   bx = dmapos * 16;
   printf("Render: %.2x %.2x-%.2x pf2shift:%d pf1shift:%d\n",
 	 hPos, (int)ddfstrt, (int)ddfstop,
-	 (int)(bplcon1 >> 4) & 0xF,
-	 (int)(bplcon1 >> 0) & 0xF);
-
+	 pf2shift(), pf1shift());
+#if 0
+  for (int i = 0; i < 8; i++) {
+    uint16_t cur = BPLxDAT(i);
+    auto shift = (i & 1) ? pf2shift() : pf1shift();
+    uint16_t comb = (bpl_prev[i] << 16) | cur;
+    pd[i] = ((comb >> (16 - shift)));
+    bpl_prev[i] = cur;
+  }
+#endif
   // build line
   assert(count*16 < 640);
   for (int x = 0; x < count*16; x++) {
@@ -2248,22 +2253,21 @@ int amiga::bpdma(int mode) {
   if (vPos >= screen.y0 && vPos < screen.y1) {
     // if we're within screen boundary
     if (mode == bpl1 || mode == bpl1h) {
-      if (totdma++ > wdma) {
+      // done with fetches....
+      if (totdma > wdma) {
 	return Even;
       }
       for (int i = 0; i < bpu; i++) {
 	// rundma... if hackbltro, only run if frame==3
-	if (hPos < ddfstrt) {
+	if (hPos < ddfstrt || hPos >= ddfstop + 8) {
 	  BPLxDAT(i) = 0;
 	}
 	else {
 	  rxdma(BPLxDAT(i), BPLxPTR(i), DMA_BPEN, "bpl");
 	}
-	if (hPos >= ddfstop) {
-	  BPLxDAT(i) = 0;
-	}
       }
-      renderbg(vPos, 1, totdma - 1);
+      renderbg(vPos, 1, totdma);
+      totdma++;
     }
   }
   return mode;
@@ -2286,18 +2290,21 @@ uint16_t *spraddr(int n) {
   return (uint16_t *)&mem[SPR0DATA + (n * 8)];
 }
 
+// mode == 2: 4-color
+// mode == 99: 16-color
 void amiga::renderspr(int y, int n, int mode, uint32_t *palette)
 {
   sprite_t *s = &sprites[n];
-  int x0 = s->x0;
   uint16_t mask = 0x0080;
   uint16_t *pd;
+  int x0 = s->x0;
   
   if (y < s->y0 || y >= s->y1) {
     // if scanline outside of sprite, exit
     return;
   }
   pd = spraddr(n);
+  // render 16 pixels
   for (int i = 0; i < 16; i++) {
     int clr = pclr(pd, mask, mode);
     if (clr != 0 && (x0 + i) < 640) {
@@ -2361,12 +2368,14 @@ void amiga::sethblank(bool state) {
   }
   int y = vPos - 1;
   printf("--eol %d [%d]\n", vPos, screen.y0);
-  
+
+  memset(bpl_prev, 0, sizeof(bpl_prev));
   if (vPos >= screen.y0) {
-    // render sprite from back to front....
+    // at hblank, render sprite from back to front....
     // covers priority for sprites
     for (int i = 6; i >= 0; i-=2) {
       if (attached(i)) {
+	// check if sprite is attached
 	renderspr(y, i, 99, &cpal[16]);
       }
       else {
@@ -2392,7 +2401,10 @@ void amiga::sethblank(bool state) {
       totlen = (ddfstop - ddfstrt) * 2;
       start = 320 - totlen - 16;
     }
-    drawline(scr, bgline+start, totlen, 0, y - screen.y0 + 10, 0);
+    // drawline to screen buffer.
+    drawline(scr, bgline+start, totlen, 10, 10+y-screen.y0, 0);
+
+    // clear bgline
     xline(bgline, 640, 0);
     
     totdma = 0;
@@ -2425,13 +2437,13 @@ bool amiga::vid_tick()
     ndma = (ddfstop - ddfstrt);
     if (bplcon0 & 0x8000) {
       // hires
-      wdma = (ndma / 4) + 2 + ddelta;
+      wdma = (ndma / 4) + 1 + ddelta;
     }
     else {
       // lowres
       wdma = (ndma / 8) + ddelta;
     }
-    printf("wdma: %3d %d\n", vPos, wdma);
+    printf("wdma: %.2x %.2x %3d %d\n", (int)ddfstrt, (int)ddfstop, vPos, wdma);
   }
   coppc = runcop(coppc, hPos, vPos);
   dodma(hPos);
@@ -2624,14 +2636,15 @@ void amiga::chip_write(uint32_t addr, uint32_t val, int n)
 	   !!((val >> 10) & 1),
 	   !!((val >> 3) & 1),
 	   (bplcon0 & 0x8000)?"hires":"lores");
+    showbits(bplcon0, bits_bplcon0, "bplcon0");
     break;
   case BPLCON1:
     // PF2H3-0
     // PF1H3-0
     printf("%4d bplcon1: pf2:%x pf1:%x\n",
 	   vPos,
-	   ((val >> 4) & 0xf),
-	   ((val >> 0) & 0xf));
+	   pf2shift(),
+	   pf1shift());
     break;
   case BPLCON2:
     // PF2PRI
@@ -2849,7 +2862,8 @@ void amiga::drawframe()
 	 dma_enabled(DMA_BPEN),
 	 cia_a.pra);
 
-  scr->scrbox(screen.x0, 0, screen.x1, screen.y1-screen.y0, MKRGB(255,255,0));
+  // draw screen box, upper corner = 10,10
+  scr->scrbox(10, 10, screen.x1 - screen.x0 + 10, screen.y1 - screen.y0 + 10, MKRGB(255,255,0));
 
   /* Draw CIA pra/prb state */
   for (int i = 0; i < 8; i++) {
@@ -2910,17 +2924,19 @@ void amiga::drawframe()
     count = (count / 4) + 2;
   }
   else {
+    // lores
     count = (count / 8) + 1;
   }
   now = time(NULL);
   fps = (float)frame / (now - fpstime);
   scr->scrtext(0, h + 32, WHITE, "(%d,%d)-(%d,%d) %.2x:%.2x %2d %dx%dx%d",
-	       screen.x0, screen.y0, screen.x1, screen.y1, ds, de, count,
+	       screen.x0, screen.y0, screen.x1, screen.y1,
+	       ds, de, count,
 	       count * 16, screen.y1 - screen.y0, bpu);
   scr->scrtext(0, h + 40, WHITE, "frame:%d fps:%.2f wdma:%d sh:[%x %x] dly[%x %x]",
 	       frame, fps, wdma,
 	       bltcon0 >> 12, bltcon1 >> 12,
-	       (bplcon1 >> 3) & 7, bplcon1 & 7);
+	       pf2shift(), pf1shift());
 #if 0
   draw_gradient(scr, 180, 250, 0xFF00FF,
 		100,0, 0x00FFFF,
@@ -3188,7 +3204,7 @@ int main(int argc, char *argv[])
   }
   
   // https://github.com/nicodex/amiga-ocs-cpubltro/blob/main/cpubltro.asm
-  thegame.init("roms/de-amiga-os-204.rom");
+  thegame.init("roms/de-amiga-os-130.rom");
   //thegame.init("cpubltro-0f8.rom");
   //thegame.init("emutos-amiga-rom-1.3//emutos-amiga.rom");
   //thegame.init("DiagROM/16bit.bin");

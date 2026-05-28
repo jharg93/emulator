@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <time.h>
+#include <map>
 #include "util.h"
 #include "bus.h"
 #include "cpu.h"
@@ -15,11 +16,10 @@
 
 #define VRAM_BANK1 0x2000
 
-uint8_t ntflag;
-
-void dumpcfg(uint8_t *buf, size_t len, int off);
+void dumpcfg(uint8_t *buf, size_t len, int n, int off[]);
 void runppu(int ticks);
 void getpal(int *pp, uint8_t bgp);
+void flogger(int, const char *, ...);
 
 struct sline {
   int valid;
@@ -27,11 +27,32 @@ struct sline {
   int pxl;
 };
 
-// 0 = white
-// 1 = light gray
-// 2 = dark grey
-// 3 = black
+/* 4 bytes per sprite x 40 sprites = 160 bytes
+ * Max 10 sprites per line
+ */
+struct gboam_t {
+  uint8_t y;
+  uint8_t x;
+  uint8_t tid;
+  uint8_t attr;
+};
+
+int show_lyc;
+int izhlt;
+int trace=0;
+uint64_t totcyc;
+int rwtick;
+
+int isCGB = 0;
+uint8_t ntflag;
 int palbase;
+Screen *scr;
+extern int SPC;
+
+static uint8_t oamdata[0x100];
+static gboam_t *gboam = (gboam_t *)oamdata;
+
+static uint8_t vram[0x4000]; // two banks
 
 static palclr gbpal[] = {
   { 0xFF,0xFF,0xFF }, { 0xBF,0xBF,0xBF }, { 0x3F,0x3F,0x3F }, { 0x00,0x00,0x00 },  // b&w
@@ -61,12 +82,15 @@ struct tileset {
   int getpixel(int x, int y) {
     int off, a0, a1;
 
-    assert(x < w && y < h);
     /* pixel 0 is leftmost, so flip shift */
     if ((attr & ATTR_FLIPX) == 0)
       x = w - x - 1;
     if (attr & ATTR_FLIPY)
       y = h - y - 1;
+    if (x >= w || y >= h) {
+      printf("out of range: x:%x %x y:%x %x\n", x, w, y, h);
+      assert(0);
+    }
     off = y * 2;
     a0 = set[off+0];
     a1 = set[off+1] << 1;
@@ -162,34 +186,6 @@ constexpr bool clip(const int x, const int y, const int x1, const int y1, const 
   return !(x >= x1 && x < x2 && y >= y1 && y < y2);
 }
 
-Screen *scr;
-void flogger(int, const char *, ...);
-
-extern int SPC;
-
-/* 4 bytes per sprite x 40 sprites = 160 bytes
- * Max 10 sprites per line
- */
-struct gboam_t {
-  uint8_t y;
-  uint8_t x;
-  uint8_t tid;
-  uint8_t attr;
-};
-static uint8_t oamdata[0x100];
-static gboam_t *gboam = (gboam_t *)oamdata;
-
-static uint8_t vram[0x4000]; // two banks
-
-int show_lyc;
-int izhlt;
-int trace=1;
-uint64_t totcyc;
-int rwtick;
-
-time_t fpstime = time(NULL);
-
-int isCGB = 0;
 /* BGP0: 0x10
  * BGP1: 0x14
  * BGP2: 0x18
@@ -267,7 +263,7 @@ void cpu_write8(uint32_t off, uint8_t v, int type) {
  *===================================================*/
 int setmask(int key, uint8_t & k, uint8_t m)
 {
-  if (scr->KeyState[key]) {
+  if (scr->keyState[key]) {
     flogger(0, "keystate: '%c'\n", key);
     k |= m;
   }
@@ -278,12 +274,11 @@ int setmask(int key, uint8_t & k, uint8_t m)
 
 /* Register name */
 const char *rn(int offset) {
-#define o(id, addr, rw, desc) case id: return #id;
+#define o(id, addr, rw, desc) case addr: return #id;
   switch(offset) {
-    CHIPREG(o);
-  }
+    CHIPREG(o)
+      };
 #undef o
-  return "";
 }
 
 #define ffio(x) regs[x - 0xFF00]
@@ -887,14 +882,14 @@ static int mbc5io(void *arg, uint32_t offset, int mode, uint8_t &data)
 }
 
 #define KBIT(n) (((n) * 1024) / 8)
-int gbRomSz(int n) {
+static int gbRomSz(int n) {
   printf("GB Rom Sz: %d\n", n);
   if (n <= 8)
     return 32768LL << n;
   assert(0);
 }
 
-int gbRamSz(int n) {
+static int gbRamSz(int n) {
   return 1024 * 1024;
 }
 
@@ -965,7 +960,8 @@ void gameboy::init(uint8_t *buf, int len)
   mb.register_handler(0xFF00, 0xFF0F, 0xFFFF,  regio,  this,     _RW, "Registers");
   mb.register_handler(0xFF40, 0xFF7F, 0xFFFF,  regio,  this,     _RW, "Registers");
   mb.register_handler(0xFFFF, 0xFFFF, 0xFFFF,  regio,  this,     _RW, "Registers");
-  mb.register_handler(0xFF10, 0xFF3F, 0xFFFF,  apu_io, this,     _RW, "APU Registers");
+  mb.register_handler(0xFF10, 0xFF3F, 0xFFFF,  apu_rd, this,     _RD, "APU Registers.rd");
+  mb.register_handler(0xFF10, 0xFF3F, 0xFFFF,  apu_wr, this,     _WR, "APU Registers.wr");
   mb.register_handler(0xFF80, 0xFFFE, 0x007F,  memio,  zpg,      _RW, "GB Zero Page");
 
   /* Setup mappers */
@@ -1044,7 +1040,7 @@ void drawtile(int sx, int sy, uint8_t *ptr, int bgp, int hm=0, int vm=0, int tra
   }
 }
 
-/* Draw a tile */
+/* Draw nametable */
 void drawtt(int tilebase, int tx, int ty, int mod = 16, int n = 256)
 {
   int i, x, y;
@@ -1056,7 +1052,7 @@ void drawtt(int tilebase, int tx, int ty, int mod = 16, int n = 256)
   tilebase &= 0x3FFF;
   for (i = 0; i < n*16; i+= 16) {
     vbk = &vram[tilebase + i];
-    if (isCGB) {
+    if (c) {
       /* +---+---+---+---+---+---+---+---+
        * |PRI| VF| HF|   |BNK|    PAL    |
        * +---+---+---+---+---+---+---+---+ */
@@ -1132,7 +1128,7 @@ int gameboy::getsprite(oam_t *o, int id, int y)
 
   /* Get sprite position, size and attributes */
   o->setres(gboam[id].x - 8, gboam[id].y - 16,
-	    8,thegame.r_LCDC & LCDC_SPRITE_SZ ? 16 : 8,
+	    8, thegame.r_LCDC & LCDC_SPRITE_SZ ? 16 : 8,
 	    gboam[id].attr);
   if (!inrange(y, o->YPOS(), o->HEIGHT()))
     return -1;
@@ -1157,11 +1153,10 @@ void gameboy::drawppu()
   time_t now;
   float fps;
   static uint8_t tr;
-  
+  static time_t fpstime = time(NULL);
+
   if (!(r_LCDC & LCDC_EN))
     return;
-  setmask('t', tr, 0x1);
-  trace = tr;
   
   setmask(';', ntflag, 0x1); // sprites
   setmask('/', ntflag, 0x2); // bg
@@ -1209,11 +1204,11 @@ void getpal(int *pp, uint8_t bgp)
     pp[3] = bgp+3;
   }
   else {
-    /* DMG colors */
+    /* DMG colors 33221100 */
     pp[0] = palbase + (bgp & 3);
-    pp[1] = palbase + (bgp >> 2) & 3;
-    pp[2] = palbase + (bgp >> 4) & 3;
-    pp[3] = palbase + (bgp >> 6) & 3;
+    pp[1] = palbase + ((bgp >> 2) & 3);
+    pp[2] = palbase + ((bgp >> 4) & 3);
+    pp[3] = palbase + ((bgp >> 6) & 3);
   }
 }
 
@@ -1297,13 +1292,11 @@ int gameboy::getsprites(int y, oam_t *spr)
  *  Mode 1  ____________________________________11111111111111_____
  */
 // https://github.com/alloncm/MagenTests/tree/master/src/color_bg_oam_priority
-#if 0
-#endif
 void gameboy::drawline(int y)
 {
   int tile, tid, pxl;
   uint8_t sx, sy, attr, nspr = 0;
-  oam_t spr[MAX_SPRITE_PER_LINE];
+  oam_t spr[MAX_SPRITE_PER_LINE] = {};
   sline   sprline[160] = {};
   tileset bg;
   int wy_incr = 0;
@@ -1329,7 +1322,7 @@ void gameboy::drawline(int y)
     sx = s.XPOS();
     sy = y - s.YPOS();
     if (isCGB) {
-      getpal(pal, ((s.attr & 7 ) * 4) + 0x40);
+      getpal(pal, ((s.attr & 7) * 4) + 0x40);
     }
     else {
       getpal(pal, s.attr & ATTR_PALETTE ? r_OBP1 : r_OBP0);
@@ -1474,24 +1467,35 @@ const char *gr_getstate()
   return dstr;
 }
 
+bool checkhlt() {
+  return (thegame.r_IE & thegame.r_IF);
+};
+
 int main(int argc, char *argv[])
 {
   int ncyc;
   uint8_t *buf;
   size_t len;
-    
+  int opt;
+  
   //tester_run(&flags, &ops);
   //test();
-  if (argc <= 1) {
-    printf("usage; gboy <romfile>\n");
-    return -1;
+  while ((opt = getopt(argc, argv, "t")) != -1) {
+    if (opt == 't') {
+      trace = 1;
+    }
+    else {
+      printf("usage; gboy <romfile>\n");
+      return -1;
+    }
   }
-  buf = loadrom(argv[1], len);
+  buf = loadrom(argv[optind], len);
   if (!buf)
     return -1;
 
   if (argc > 3) {
-    dumpcfg(buf, len, 0x100);
+    int offs[32] = {0x100, 0x4000 };
+    dumpcfg(buf, len, 32, offs);
   }
 
   thegame.init(buf, len);
@@ -1513,6 +1517,10 @@ int main(int argc, char *argv[])
     if (!izhlt) {
       ncyc = cpu_step();
       totcyc += ncyc;
+    }
+    else if (izhlt == 2) {
+      printf("halt bug!\n");
+      exit(1);
     }
     if (rwtick > ncyc) {
       printf("TOO MANY TICKS %d %d\n", rwtick, ncyc);

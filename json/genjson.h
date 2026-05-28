@@ -6,6 +6,12 @@ struct rr_t {
   uint32_t *val;
 };
 
+enum Arch {
+  M68k=1,
+  X86,
+};
+
+template <Arch>
 void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32_t *));
 
 #endif

@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdarg.h>
+#define __cpu_big_endian
 #include "cpu.h"
 #include "bus.h"
 #include "util.h"
@@ -591,21 +592,6 @@ void mac68k::setvblank(bool state) {
   }
 }
 
-
-#if 0
-static void pushregs()
-{
-  for (int i = 0; i < 16; i++) {
-    cpu_push32(regs[i]);
-  }
-}
-
-static void popregs() {
-  for (int i = 15; i >= 0; i--) {
-    regs[i] = cpu_pop32();
-  }
-}
-#endif
 
 void dumpr(uint8_t *ram, int off, const char *name) {
   if (off >= 0x100 && off < 0x1000) {
@@ -1213,17 +1199,17 @@ uint16_t cpu_read16(uint32_t addr, int type) {
   return v;
 }
 
-uint32_t cpu_read32(uint32_t addr, int type) {
+uint32_t cpu_read32(const uint32_t addr, int type) {
+  uint32_t naddr = addr & 0xffffff;
   void *ptr;
 
-  addr &= 0xffffff;
-  if ((ptr = ioptr(addr, 'r')) == NULL) {
-    return cpu_read32be(addr, type);
+  if ((ptr = ioptr(naddr, 'r')) == NULL) {
+    return cpu_read32be(naddr, type);
   }
   return get32be(ptr);
 }
 
-void cpu_write8(uint32_t addr, uint8_t v, int type) {
+void cpu_write8(const uint32_t addr, const uint8_t v, int type) {
   void *ptr;
 
   if (addr >= audio_base && addr <= (audio_base + 0x2e4)) {
@@ -1238,9 +1224,10 @@ void cpu_write8(uint32_t addr, uint8_t v, int type) {
   }
 }
 
-void cpu_write16(uint32_t addr, uint16_t v, int type) {
+void cpu_write16(const uint32_t addr, const uint16_t v, int type) {
   void *ptr;
 
+  printf("write16: %.8x %.8x : %.4x\n", addr, v, type);
   if ((ptr = ioptr(addr, 'w')) != NULL) {
     put16be(ptr, v);
   }
@@ -1249,9 +1236,10 @@ void cpu_write16(uint32_t addr, uint16_t v, int type) {
   }
 }
 
-void cpu_write32(uint32_t addr, uint32_t v, int type) {
+void cpu_write32(const uint32_t addr, const uint32_t v, int type) {
   void *ptr;
 
+  printf("write32: %.8x %.8x : %.4x\n", addr, v, type);
   if ((ptr = ioptr(addr, 'w')) != NULL) {
     put32be(ptr, v);
   }
@@ -1661,11 +1649,12 @@ void getextra(dstk& s, uint32_t base, uint32_t size)
   }
 }
 
+// include json parser
 #define PJSON
 #include "json/pjson.cc"
 
 static uint32_t tmpsr;
-rr_t regread[] = {
+static rr_t m68kreg[] = {
   { "d0", &D[0] },
   { "d1", &D[1] },
   { "d2", &D[2] },
@@ -1688,9 +1677,11 @@ rr_t regread[] = {
   { },
 };
 
-void runjson(uint32_t *prefetch) {
+// Callback for json test
+static void m68k_test_json(uint32_t *prefetch) {
   uint16_t op;
 
+  printf("initial PC: %.8x\n", PC);
   SR = tmpsr;
   if (SR & 0x2000){
     SP = ssp;
@@ -1698,6 +1689,7 @@ void runjson(uint32_t *prefetch) {
     SP = usp;
   }
   trace=3;
+  // needed for harte tests but not 68k single step
   cpu_write16be(PC, prefetch[0]);
   cpu_write16be(PC+2, prefetch[1]);
   SPC = PC;
@@ -1711,6 +1703,33 @@ void runjson(uint32_t *prefetch) {
   else {
     usp = SP;
   }
+  PC += 4;
+}
+
+const char *eastr[16] = { "Dn", "An", "(An)", "(An)+", "-(An)", "(An,d16)", "(An,Xn,d8)", "(xxx).w", "(xxx).l",
+			"(PC,d16)", "(PC,Xn,d8)", "#imm" };
+
+void done_json() {
+  for (int i = 0; i < 16; i++) {
+    printf("ea[%-10s]: %4x %4x\n",
+	   eastr[i] ? eastr[i] : "",
+	   csrc[i], cdst[i]);
+  }
+}
+
+constexpr int trop(int u, int sz, int mmm, int yyy) {
+  return (u << 8) | (sz << 6) | (mmm << 3) | yyy;
+};
+
+void ck(uint16_t n, int tr) {
+  trace=3;
+  decode_68k(n);
+  if (tr != ctick) {
+    printf("ctick %.8x %.8x\n", ctick, tr);
+  }
+  else {
+   printf("=== haz\n");
+ }
 }
 
 int main(int argc, char *argv[])
@@ -1724,7 +1743,48 @@ int main(int argc, char *argv[])
     const int memsize = 0x1000000;
     uint8_t *mem = new uint8_t[memsize]{0};
     sys.register_handler(0x000000, 0xFFFFFF, 0xFFFFFF, memio, mem, _RW, "ram");
-    read_json(argv[2], regread, mem, runjson);
+    read_json<M68k>(argv[2], m68kreg, mem, m68k_test_json);
+  }
+  if (argc > 1 && !strcmp(argv[1], "-test")) {
+    // ori  0000.0000 00
+    // andi 0000.0010 02
+    // subi 0000.0100 04
+    // addi 0000.0110 06
+    // eori 0000.1010 0a
+    // eori dn,ea 1011.xxx1 b1,xxx,byte,xx
+    // and ea,dn  1100.xxx0 c0,xxx
+    // and dn,ea  1100.xxx1 c1,xxx
+    ck(trop(0x00,0,7,4), _TR(20,3,0)); // oriccr
+    ck(trop(0x00,1,7,4), _TR(20,3,0));
+    ck(trop(0x02,0,7,4), _TR(20,3,0)); // andiccr
+    ck(trop(0x02,1,7,4), _TR(20,3,0));
+    ck(trop(0x0a,0,7,4), _TR(20,3,0)); // eoriccr
+    ck(trop(0x0a,1,7,4), _TR(20,3,0));
+    for (int i = 0; i <= 0xa; i += 2) {
+      if (i == 8) continue;
+      ck(trop(i,0,0,3), _TR(8,2,0));  // addi.b dn 0000.011.000.000.111
+      ck(trop(i,1,0,5), _TR(8,2,0));  // addi.w dn 0000.011.001.000.101
+      ck(trop(i,2,0,4), _TR(16,3,0)); // addi.l dn 0000.011.010.000.100
+      
+      ck(trop(i,0,3,3), _TR(12,2,1) + _TR(4,1,0)); // addi.b (an)+
+      ck(trop(i,1,3,5), _TR(12,2,1) + _TR(4,1,0)); // addi.w (an)+
+      ck(trop(i,2,3,4), _TR(20,3,2) + _TR(8,2,0)); // addi.l (an)+
+      
+      ck(trop(i,0,7,1), _TR(12,2,1) + _TR(12,3,0)); // addi.b .l
+      ck(trop(i,1,7,1), _TR(12,2,1) + _TR(12,3,0)); // addi.w .l
+      ck(trop(i,2,7,1), _TR(20,3,2) + _TR(16,4,0)); // addi.l .l
+    }
+    // eori
+    ck(trop(0xb3, 0, 0, 3), _TR(4,1,0));//ok
+    ck(trop(0xb3, 1, 0, 5), _TR(4,1,0));//ok
+    ck(trop(0xb3, 2, 0, 6), _TR(6,1,0));//notok
+
+    ck(trop(0xb3, 0, 3, 3), _TR(4,1,0) + _TR(4,1,0));//ok
+    ck(trop(0xb3, 1, 3, 5), _TR(4,1,0) + _TR(4,1,0));//ok
+    ck(trop(0xb3, 2, 3, 6), _TR(6,1,0) + _TR(8,1,0));//notok
+    
+    decode_68k(0x72bc);
+    exit(0);
   }
   // Load disk image
   buf = loadrom(DISK, sz);

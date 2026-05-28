@@ -425,7 +425,7 @@ static arg_t getarg(int arg, bool _8bit)
     return mkmem(cpu_fetch16(), 0);
   case ABX:   // abs,X [nnnn+X]
     return mkmem(cpu_fetch16(), _X);
-  case ABY:   // abs, Y [nnnn+Y]
+  case ABY:   // abs,Y [nnnn+Y]
     return mkmem(cpu_fetch16(), _Y);
   case DPG:   // dir [nn]
     return mkmem(0, cpu_fetch8());

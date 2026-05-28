@@ -66,17 +66,18 @@ enum {
   _Bf = 0x10,
 
   // these determine the type of opcode argument
-  // register:  0x4____N (A=0,X=1,Y=2)
-  // immediate: 0x1___NN
-  // memory:    0x2_NNNN
-  TYPE_MEM =  0x400000,
-  TYPE_IMM =  0x100000,
-  TYPE_REG =  0x200000,
+  // +----+----+----+----+----+----+----+----+
+  // |type|flag|         |      value        |
+  // +----+----+----+----+----+----+----+----+
+  TYPE_SHIFT = 24,
+  TYPE_REG =  (2 << TYPE_SHIFT),
+  TYPE_MEM =  (4 << TYPE_SHIFT),
+  TYPE_IMM =  (1 << TYPE_SHIFT),
 
-  SKIP     =  0,
-  CROSS    =  0x010000,
-  BRANCH   =  0x020000,
-  WRONLY   =  0x040000,
+  FLAG_SHIFT = 20,
+  CROSS    =  (1 << FLAG_SHIFT),
+  BRANCH   =  (2 << FLAG_SHIFT),
+  WRONLY   =  (4 << FLAG_SHIFT),
 };
 
 bool hlt = false;
@@ -240,7 +241,6 @@ static uint8_t add(const uint8_t src) {
   Vf  = VFLAG(A, src, sum, 0x80); //~(A ^ src) & (A ^ sum) & 0x80;
   if (Df) {
     sum = (A & 0x0F) + (src & 0x0F) + !!Cf;
-
     if (sum > 0x09) {
       sum = ((sum + 6) & 0xF) + 0x10;
     }
@@ -349,7 +349,7 @@ static void HLT(cpu6502 *c, int& dst, const int src)    {  printf("HALT!!!\n"); 
 static void ALR(cpu6502 *c, int& dst, const int src) {
   /* AND imm ; LSR ACC */
   AND(c, dst, src);
-  A = nzc(A & 0x80, A >> 1);
+  A = nzc(A & 0x01, A >> 1);
 }
 static void SLO(cpu6502 *c, int& dst, const int src) {  // ASO
   /* ASL mem ; ORA mem */
@@ -399,7 +399,9 @@ static void SKB(cpu6502 *c, int& dst, const int src) { } //skip byte (NOP)
 static void SKW(cpu6502 *c, int& dst, const int src) { } //skip word (NOP)
 static void XAS(cpu6502 *c, int& dst, const int src) { assert(0); }
 static void AAC(cpu6502 *c, int& dst, const int src) { A = nz(c, A & src); Cf=Nf; }
-static void AXA(cpu6502 *c, int& dst, const int src) { assert(0); }
+static void AXA(cpu6502 *c, int& dst, const int src) {
+  dst = A & X & ((src >> 8) + 1);
+};
 static void SYA(cpu6502 *c, int& dst, const int src) { dst = nz(c, Y & ((src & 0xF0) + 1)); }
 static void SXA(cpu6502 *c, int& dst, const int src) { dst = nz(c, X & ((src & 0xF0) + 1)); }
 static void LAR(cpu6502 *c, int& dst, const int src) { A=X=S=nz(c, src & S); }
@@ -421,11 +423,11 @@ struct opcode_t {
   const char *dstr;
 };
 
-int instr_len(opcode_t *opc) {
+static int instr_len(opcode_t *opc) {
   return ((opc->arg >> 4) & 0xF) + 1;
 }
 
-opcode_t opmap[256];
+static opcode_t opmap[256];
 
 /* Format string for disassembly */
 #define sfx_IMP   ""
@@ -653,7 +655,7 @@ static void mktab() {
   _(0x08, PHP, IMP, 3);
   _(0x28, PLP, IMP, 4);
 
-  /* Fake opcodes */
+  // undocumented opcodes 
   U(0x0F, SLO, ABS, 6);  // A |= (asl.MEM)
   U(0x1F, SLO, ABX, 7);
   U(0x1B, SLO, ABY, 7);
@@ -731,28 +733,28 @@ static void mktab() {
   U(0xFA, NOP, IMP, 2);
 
   // DOP (double NOP)
-  U(0x04, SKB, ZPG, 3+SKIP);
-  U(0x14, SKB, ZPX, 4+SKIP);
-  U(0x34, SKB, ZPX, 4+SKIP);
-  U(0x44, SKB, ZPG, 3+SKIP);
-  U(0x54, SKB, ZPX, 4+SKIP);
-  U(0x64, SKB, ZPG, 3+SKIP);
-  U(0x74, SKB, ZPX, 4+SKIP);
-  U(0x80, SKB, IMM, 2+SKIP);
-  U(0x82, SKB, IMM, 2+SKIP);
-  U(0x89, SKB, IMM, 2+SKIP);
-  U(0xC2, SKB, IMM, 2+SKIP);
-  U(0xD4, SKB, ZPX, 4+SKIP);
-  U(0xE2, SKB, IMM, 2+SKIP);
-  U(0xF4, SKB, ZPX, 4+SKIP);
+  U(0x04, SKB, ZPG, 3);
+  U(0x14, SKB, ZPX, 4);
+  U(0x34, SKB, ZPX, 4);
+  U(0x44, SKB, ZPG, 3);
+  U(0x54, SKB, ZPX, 4);
+  U(0x64, SKB, ZPG, 3);
+  U(0x74, SKB, ZPX, 4);
+  U(0x80, SKB, IMM, 2);
+  U(0x82, SKB, IMM, 2);
+  U(0x89, SKB, IMM, 2);
+  U(0xC2, SKB, IMM, 2);
+  U(0xD4, SKB, ZPX, 4);
+  U(0xE2, SKB, IMM, 2);
+  U(0xF4, SKB, ZPX, 4);
 
-  U(0x0C, SKW, ABS, 4+SKIP);
-  U(0x1C, SKW, ABX, 4+CROSS+SKIP);
-  U(0x3C, SKW, ABX, 4+CROSS+SKIP);
-  U(0x5C, SKW, ABX, 4+CROSS+SKIP);
-  U(0x7C, SKW, ABX, 4+CROSS+SKIP);
-  U(0xDC, SKW, ABX, 4+CROSS+SKIP);
-  U(0xFC, SKW, ABX, 4+CROSS+SKIP);
+  U(0x0C, SKW, ABS, 4);
+  U(0x1C, SKW, ABX, 4+CROSS);
+  U(0x3C, SKW, ABX, 4+CROSS);
+  U(0x5C, SKW, ABX, 4+CROSS);
+  U(0x7C, SKW, ABX, 4+CROSS);
+  U(0xDC, SKW, ABX, 4+CROSS);
+  U(0xFC, SKW, ABX, 4+CROSS);
 
   U(0x02, HLT, IMP, 2);
   U(0x12, HLT, IMP, 2);
@@ -770,8 +772,8 @@ static void mktab() {
   U(0x0b, AAC, IMM, 2);
   U(0x2b, AAC, IMM, 2);
 
-  U(0x9F, AXA, ABY, 5);
-  U(0x93, AXA, IXY, 6);
+  U(0x9F, AXA, ABY, 5+WRONLY);
+  U(0x93, AXA, IXY, 6+WRONLY);
 
   U(0x9B, XAS, ABY, 5);
 
@@ -794,27 +796,20 @@ constexpr bool crosspg(const uint16_t offset, const uint8_t delta) {
   return ((offset & 0xFF) + delta) > 0xFF;
 }
 
-const int mkreg(uint8_t& reg) {
+constexpr int mkreg(uint8_t& reg) {
   return TYPE_REG | reg;
 }
 
-const int mkimm(int v) {
+constexpr int mkimm(int v) {
   return TYPE_IMM | v;
 }
 
-const int mkmem(int off, uint8_t delta) {
-  int nv = off + delta;
-
-  if (crosspg(off, delta))
-    nv |= CROSS;
-  return TYPE_MEM | nv;
-}
-
-int _zpg(uint8_t base, uint8_t delta) {
+constexpr int _zpg(uint8_t base, uint8_t delta) {
   base += delta;
   return TYPE_MEM | base;
 }
-int _abs(uint16_t base, uint8_t delta) {
+
+constexpr int _abs(uint16_t base, uint8_t delta) {
   // masks out upper bits if passed in zpg
   int rv = TYPE_MEM + base + delta;
   if (crosspg(base, delta)) {
@@ -824,7 +819,7 @@ int _abs(uint16_t base, uint8_t delta) {
 }
 
 /* Get argument type from opcode bytes
- *   TYPE_MEM
+ *   TYPE_MEM+FLAG_CROSS
  *   TYPE_IMM
  *   TYPE_REG
  */
@@ -907,12 +902,17 @@ bool cpu_irq(int n) {
   return true;
 }
 
+void cpu_setpc(uint32_t pc) {
+  PC = pc;
+}
 /* Reset CPU and set initial PC
  * Vector: FFFC reset
  */
 void cpu_reset(uint32_t ipc) {
   mktab();
-  A = X = Y;
+  A = 0x0;
+  X = 0x0;
+  Y = 0x0;
   S = 0x0;
   cpu_setflags(0);
   if (ipc == 0)
@@ -979,9 +979,11 @@ int cpu_step() {
   /* Get Source */
   offset = getarg(opc->arg, &ib[1]);
   if ((offset & TYPE_MEM) && !(opc->flag & WRONLY)) {
+    // memory
     src = cpu_read8(offset & 0xFFFF);
   }
   else {
+    // register/immediate
     src = offset & 0xFFFF;
   }
   /* Get number of cycles */
@@ -1179,7 +1181,7 @@ int main(int argc, char *argv[]) {
 
   setbuf(stdout, NULL);
 #ifdef DSTK
-  uint32_t base = 0x0000, start = 0x8000;
+  int base = 0x0000, start = 0x8000;
 
   fd = open(argv[1], O_RDONLY);
   if (fd < 0)
@@ -1193,6 +1195,11 @@ int main(int argc, char *argv[]) {
     base  = 0x7FB0;
     start = *(uint16_t *)&ptr[0x50];
   }
+  if (strstr(argv[1], ".prg") || strstr(argv[1], ".PRG")) {
+    printf(".prg: %.4x\n", get16(ptr));
+    start = 0x80d;
+    base = 0x801 - 2;
+  }
   if (strstr(argv[1], ".nes")) {
     base  = 0x7FB0;
     start = *(uint16_t *)&ptr[0x50];
@@ -1205,7 +1212,7 @@ int main(int argc, char *argv[]) {
     base  = strtoul(argv[2], NULL, 0);
     start = strtoul(argv[3], NULL, 0);
   }
-  printf("base+size: %.4x %.4x\n", base+sz, start);
+  printf("base+size: %.4zx %.4x\n", base+sz, start);
   assert(base + sz <= 0x10000);
   memcpy(&ram[base], ptr, sz);
   cpu_reset(0);
@@ -1214,7 +1221,7 @@ int main(int argc, char *argv[]) {
   PC = *(uint16_t *)&ram[start];
   
   printf ("PC = %.4x\n", start);
-  dumpcfg(start, base, sz);
+  dumpcfg(1, &start, base, sz);
 #else
   /* 6502_functional_test.bin ends with 0xf0 */
   trace=0;

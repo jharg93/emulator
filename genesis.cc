@@ -11,6 +11,7 @@
 #include "cpu/cpu_m68k.h"
 #include "cpu/cpu_z80.h"
 
+#include "genesis_audio.h"
 extern int trace;
 
 static const int vh_map[] = { 32, 64, -1, 128 };
@@ -24,49 +25,55 @@ static int ntflag = 7;
 
 struct vdp_t;
 
+/* Sprite Attribute (8 bytes), big-endian
+ * 256:32-cells: 64 sprites per frame, 16 per scanline
+ * 320:40-cells: 80 sprites per frame, 20 per scanline
+ *   HSZ/VSZ
+ *    00 8
+ *    01 16
+ *    10 24
+ *    11 32
+ *  PR: Priority
+ *  PL: Palette
+ *  VF/HF: Flip
+ *    15  14  13  12  10  11  9   8   7   6   5   4   3   2   1   0
+ *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+ *   | 0 | 0 | 0 | 0 | 0 | 0 |             ypos                      | ypos
+ *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+ *   | 0 | 0 | 0 | 0 |  HSZ  |  VSZ  | 0 |        next               | attr0
+ *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+ *   |PR |  PL   | VF| HF|               tile                        | attr1
+ *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+ *   | 0 | 0 | 0 | 0 | 0 | 0 |            xpos                       | xpos
+ *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+ */
+constexpr uint16_t be16(const uint8_t *p, const uint16_t mask) {
+  return ((p[0] << 8) + p[1]) & mask;
+};
 struct sprite_t {
   uint8_t ypos[2];
   uint8_t attr0[2];
   uint8_t attr1[2];
   uint8_t xpos[2];
 
-  /* Sprite Attribute (8 bytes), big-endian
-   * 256 32-cells: 64 sprites per frame, 16 per scanline
-   * 320 40-cells: 80 sprites per frame, 20 per scanline
-   * HSZ/VSZ
-   *  00 8
-   *  01 16
-   *  10 24
-   *  11 32
-   *    15  14  13  12  10  11  9   8   7   6   5   4   3   2   1   0
-   *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-   *   | 0 | 0 | 0 | 0 | 0 | 0 |             ypos                      | ypos
-   *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-   *   | 0 | 0 | 0 | 0 |  HSZ  |  VSZ  | 0 |        next               | attr0
-   *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-   *   |PR |  PL   | VF| HF|               tile                        | attr1
-   *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-   *   | 0 | 0 | 0 | 0 | 0 | 0 |            xpos                       | xpos
-   *   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-   */
-  int XPOS()   const { return (xpos[1] | ((xpos[0] & 0x3F) << 8)) - 128; };
-  int YPOS()   const { return (ypos[1] | ((ypos[0] & 0x3F) << 8)) - 128; };
+  int XPOS()   const { return be16(xpos, 0x3FF) - 128; };
+  int YPOS()   const { return be16(ypos, 0x3FF) - 128; };
   int HEIGHT() const { return ((attr0[0] >> 0) & 0x3) * 8 + 8; };
   int WIDTH()  const { return ((attr0[0] >> 2) & 0x3) * 8 + 8; };
   int NEXT()   const { return (attr0[1] & 0x7f); };
   int PRI()    const { return ((attr1[0] >> 7) & 0x1); };
   int PAL()    const { return ((attr1[0] >> 5) & 0x3) * 16; };
   int FLAGS()  const { return (attr1[0] & (HFLIP|VFLIP)); };
-  int TILE()   const { return (attr1[1] + ((attr1[0] & 0x7) << 8)) * 0x20; };
+  int TILE()   const { return be16(attr1, 0x7ff) * 0x20; };
 
   int SXPOS(int x) const {
-    if (FLAGS() & HFLIP) {
+    if (attr1[0] & HFLIP) {
       return XPOS() + WIDTH() - x - 1;
     };
     return XPOS() + x;
   };
   int SYPOS(int y) const {
-    if (FLAGS() & VFLIP) {
+    if (attr1[0] & VFLIP) {
       return YPOS() + HEIGHT() - y - 1;
     };
     return y - YPOS();
@@ -410,44 +417,41 @@ void vdp_t::renderspr(int *line, int y, int pri, int nspr, sprite_t **spr)
  */
 void vdp_t::renderbg(int *line, int y, int pri)
 {
-  uint16_t ntaddr, attr, tile, flags;
-  int hscroll[3], vscroll[3], tx, ty, pxl[8], clr[16], txx, tyy;
-  uint16_t addr[3];
-
+  int hscroll[3], vscroll[3];
   getscroll(y, hscroll, vscroll);
 
   /* Background priority base address */
-  addr[0] = SCROLLB_ADDR;
-  addr[1] = SCROLLA_ADDR;
-  addr[2] = WINDOW_ADDR;
+  int addr[3] = { SCROLLB_ADDR, SCROLLA_ADDR, WINDOW_ADDR };
   for (int scr = 0; scr <= 2; scr++) {
     /* debug hide scroll a/b */
     if (scr == 0 && !(ntflag & 1))
       continue;
     if (scr == 1 && !(ntflag & 2))
       continue;
+    /* check if window visible */
+    if (scr == 2 && !inrange(y, wtop, wh))
+      continue;
     for (int x = 0; x < xres; x++) {
-      /* check if window visible */
-      if (scr == 2 && !inrange(y, wtop, wh))
-	continue;
       /* Get tile address */
-      tx = ((x + hscroll[scr] + ntw) % ntw);
-      ty = ((y + vscroll[scr] + nth) % nth);
-      ntaddr = NT_ADDR(tx, ty, ntw) + addr[scr];
+      int tx = ((x + hscroll[scr] + ntw) % ntw);
+      int ty = ((y + vscroll[scr] + nth) % nth);
+      uint16_t ntaddr = NT_ADDR(tx, ty, ntw) + addr[scr];
 
       /* Get tile attribute */
-      attr = NT_ATTR(&vram[ntaddr]);
-      if (pri != NT_PRI(attr))
+      uint16_t attr = NT_ATTR(&vram[ntaddr]);
+      if (NT_PRI(attr) != pri)
 	continue;
-      tile = NT_TILE(attr); 
-      flags = NT_FLAGS(attr);
+      int tile = NT_TILE(attr); 
+      int flags = NT_FLAGS(attr);
 
       /* Get tile palette */
+      int clr[16];
       getpal(clr, NT_PAL(attr), cram);
 
       /* Get tile data, 32 bits for 8 pixels */
-      txx = (tx % 8) ^ ((flags & HFLIP) ? 7 : 0);
-      tyy = (ty % 8) ^ ((flags & VFLIP) ? 7 : 0);
+      int pxl[16];
+      int txx = (tx % 8) ^ ((flags & HFLIP) ? 7 : 0);
+      int tyy = (ty % 8) ^ ((flags & VFLIP) ? 7 : 0);
       getbmp2(pxl, (uint8_t *)&vram[tile + (tyy * 4)], clr);
 
       // -1 is transparent color
@@ -458,6 +462,8 @@ void vdp_t::renderbg(int *line, int y, int pri)
   }
 }
 
+// render a scanline. draw back to front
+//  bg0,sprite0,bg1,sprite1
 void vdp_t::renderline(int y)
 {
   sprite_t *spr[max_sprites_per_line];
