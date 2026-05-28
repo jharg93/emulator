@@ -72,6 +72,7 @@ enum {
  * 0050 Start address
  */
 
+//https://www.linusakesson.net/scene/nine/explanation.php
 #define EX 40
 int EY=52;
 int SPRY=0;
@@ -521,6 +522,7 @@ struct c64 : public bus_t {
   uint8_t  exgame = 0x3 << 3;
   uint8_t  mapreg;
 
+  int      rline[320];
   sprite_t xspr[8];
 
   /* VIC */
@@ -591,6 +593,7 @@ struct c64 : public bus_t {
   };
   c64();
   uint8_t *charram(int offset);
+  uint8_t  vicram(int offset);
   
   int cia1io(uint32_t offset, const int mode, iodata_t& val);
   int cia2io(uint32_t offset, const int mode, iodata_t& val);
@@ -1560,6 +1563,17 @@ uint8_t *c64::charram(int offset)
   }
   return &ram[offset];
 }
+uint8_t c64::vicram(int offset)
+{
+  offset += chrbase;
+  
+  switch(offset) {
+  case 0x1000 ... 0x1FFF:
+  case 0x9000 ... 0x9FFF:
+    return charset[offset & 0xFFF];
+  }
+  return ram[offset];
+}
 
 /* Tiles: 8x8
  * Sprites: 24x21
@@ -1938,8 +1952,8 @@ void c64::drawline(int y)
   chrbase = vicbase + cb;
 
   /* Get XSCROLL/YSCROLL */
-  sx = 0;
-  sy = 0;
+  sx = XSCROLL();
+  sy = YSCROLL();
   for (int x = 0; x < 40; x++) {
     const int addr = (y * 40) + x;
 
@@ -2229,7 +2243,7 @@ void c64::run(const char *prgfile)
 	cia1.cia_irq.clear(pendcia1);
       }
       if (rc && pendvic) {
-	vic_irq.clear(pendvic);
+	cia1.cia_irq.clear(pendvic);
       }
     }
   }
