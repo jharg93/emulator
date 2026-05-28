@@ -36,7 +36,6 @@
 #include "bus.h"
 #include "audio.h"
 #include "c64.h"
-#include "crtc.h"
 
 extern int SPC;
 extern int trace;
@@ -367,7 +366,7 @@ struct bmap_t {
   { RAM,   RAM,   RAM,   RAM },
   { RAM,   RAM,   IOR,   RAM },
   { RAM,   RAM,   IOR,   KERNAL },
-  { RAM,   BASIC, IOR,   KERNAL },   // 11.111 default
+  { RAM,   BASIC, IOR,   KERNAL },   // default
 };
 
 struct c64;
@@ -678,8 +677,7 @@ const char petscii[] =
 void setmapreg(c64 *c, uint8_t val)
 {
   int bm = c->exgame + (val & 7);
-
-  c->ram[0x01] = val;
+  
   if (c->mapreg != val) {
     if ((val & 0b001000) == 0) {
       c->cia1.cia_irq.set(CIA1_IRQ_DATASETTE);
@@ -1941,7 +1939,7 @@ void c64::drawline(int y)
 
   /* Get XSCROLL/YSCROLL */
   sx = 0;
-  sy = YSCROLL();
+  sy = 0;
   for (int x = 0; x < 40; x++) {
     const int addr = (y * 40) + x;
 
@@ -2127,7 +2125,7 @@ void c64::ppu_tick()
 {
   static uint32_t dot, nextline = CYCLES_PER_LINE;
   int smode = scrmode();
-  int row = scanline - EY - YSCROLL();
+  int row = scanline - EY;
 
   if (++dot < nextline) {
     return;
