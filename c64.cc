@@ -1840,7 +1840,7 @@ void pbits(uint8_t *m, int *clr, int w, int h, int row, int mc)
       }
     }
     const char *m0 = ""; //"\033[0m";
-    printf("|%s|%s %2d %s\n", str, m0, row + y, (row + y) >= 0 && (row + y) <= 7 ? "YES" : "");
+    printf("|%s|%s %2d %s\n", str, m0, y, row == y ? "YES" : "");
   }
 }
 
@@ -1883,7 +1883,7 @@ bool sprite_t::load(c64 *c, int n, int y)
   
   /* Sprite upper left coords = (24,50) */
   sx = ioreg(SPRITE_X + (n * 2)) - 24;
-  sy = ioreg(SPRITE_Y + (n * 2)) - 50;
+  sy = ioreg(SPRITE_Y + (n * 2)) - 50 - 1;
   if (c->sprite_x8 & sbit)
     sx += 256;
 
@@ -1892,13 +1892,11 @@ bool sprite_t::load(c64 *c, int n, int y)
   ey  = (c->sprite_ey & sbit) ? 2 : 1;
   mc  = (c->sprite_mc & sbit) ? 2 : 1;
   pri = !!(c->sprite_pri & sbit);
-  if (pri) {
-    printf("sprite %d pri\n", n);
-  }
   
   /* Check if y line in sprite */
   if (!visible(y))
     return false;
+  printf("sprite%d: %d,%d %d x %d [%d %d]\n", n, sx, sy, ex*24, ey*21, c->XSCROLL(), c->YSCROLL());
 
   /* Get sprite bits position in RAM */
   sp = c->sprite_ptr[n] * 64 + c->vicbase;
@@ -1918,6 +1916,13 @@ bool sprite_t::load(c64 *c, int n, int y)
   return true;
 }
 
+// Store pixel info in rline
+// +--------+--------+--------+--------+
+// |priority|   xxx  | color# | color  |
+// +--------+--------+--------+--------+
+// draws background with pri == 2
+// draws sprite with pri == 1 or 3
+// if color# == 0 and pri == 1, then override
 auto spix = [](int *rline, int x, uint8_t bmp, int bpp, int *clr, int pri = 0) {
   int c, rp, rc;
   
@@ -1928,8 +1933,7 @@ auto spix = [](int *rline, int x, uint8_t bmp, int bpp, int *clr, int pri = 0) {
     if (clr[c] != -1) {
       if (rp != 0)
 	collide = true;
-      if (pri > rp || rc == 0)
-	rline[x] = (pri << 24) | (c << 16) | clr[c];
+      rline[x] = (pri << 24) | (c << 16) | clr[c];
     }
   }
  };
@@ -1961,6 +1965,7 @@ void c64::drawsprite(int n, int y) {
   int px = s->sx;
   int np = s->mc * s->ex;
   uint8_t *bp = &ram[s->sp + (y - s->sy) * 3];
+  pbits(&ram[s->sp], s->clr, 24, s->ey*21, y - s->sy, s->mc);
   for (int tx = 0; tx < 3; tx++) {
     uint8_t bmp = bp[tx];
     for (int i = 0; i < 8; i += s->mc) {
@@ -1971,7 +1976,6 @@ void c64::drawsprite(int n, int y) {
     }
   }
 #else
-  pbits(&ram[s->sp], s->clr, 24, 21, s->sy - y, s->mc);
   drawbmp(EX+s->sx, EY+s->sy, 24, 21, &ram[s->sp], s->ex, s->ey, s->mc, s->clr, y + EY);
 #endif
   if (collide) {
@@ -2207,7 +2211,8 @@ void c64::ppu_tick()
     smode = scrmode();
     if ((row % 8) == 0) {
       fprintf(stdout, "--- line %3d: %3d-%3d [%d,%d] raster:%d %s\n",
-	      scanline, row, row + 7, XSCROLL(), YSCROLL(), raster_irq, 
+	      scanline, row, row + 7,
+	      XSCROLL(), YSCROLL(), raster_irq, 
 	      scrmodes[smode]);
     }
     /* Draw line and sprite */

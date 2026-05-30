@@ -296,7 +296,7 @@ enum ciacon {
   o(0xbfed01, "RW", CIAA_ICR,  "CIA.A icr")				\
   o(0xbfee01, "RW", CIAA_CRA,  "CIA.A cra")				\
   o(0xbfef01, "RW", CIAA_CRB,  "CIA.A crb")				\
-  o(0xbfd001, "RW", CIAB_PRA,  "CIA.B pra")				\
+  o(0xbfd000, "RW", CIAB_PRA,  "CIA.B pra")				\
   o(0xbfd100, "RW", CIAB_PRB,  "CIA.B prb")				\
   o(0xbfd200, "RW", CIAB_DDRA, "CIA.B ddra")				\
   o(0xbfd300, "RW", CIAB_DDRB, "CIA.B ddrb")				\
@@ -312,243 +312,243 @@ enum ciacon {
   o(0xbfdd00, "RW", CIAB_ICR,  "CIA.B icr")				\
   o(0xbfde00, "RW", CIAB_CRA,  "CIA.B cra")				\
   o(0xbfdf00, "RW", CIAB_CRB,  "CIA.B crb")				\
-  o(0xdff000, "ER", BLTDDAT, "Blitter destination early read (unusable)") \
-  o(0xdff002, "R-", DMACONR, "DMA control (and blitter status) read")	\
-  o(0xdff004, "R-", VPOSR,   "Read vertical raster position bit 9 (and interlace odd/even frame)") \
-  o(0xdff006, "R-", VHPOSR,  "Rest of raster XY position - High byte: vertical, low byte: horizontal") \
-  o(0xdff008, "ER", DSKDATR, "Disk data early read (unusable)")		\
-  o(0xdff00a, "R-", JOY0DAT, "Joystick/mouse 0 data")			\
-  o(0xdff00c, "R-", JOY1DAT, "Joystick/mouse 1 data")			\
-  o(0xdff00e, "R-", CLXDAT,  "Poll (read and clear) sprite collision state") \
-  o(0xdff010, "R-", ADKCONR, "Audio, disk control register read")	\
-  o(0xdff012, "R-", POT0DAT, "Pot counter pair 0 data")			\
-  o(0xdff014, "R-", POT1DAT, "Pot counter pair 1 data")			\
-  o(0xdff016, "R-", POTGOR,  "Pot pin data read")			\
-  o(0xdff018, "R-", SERDATR, "Serial port data and status read")	\
-  o(0xdff01a, "R-", DSKBYTR, "Disk data byte and status read")		\
-  o(0xdff01c, "R-", INTENAR, "Interrupt enable bits read (intena)")	\
-  o(0xdff01e, "R-", INTREQR, "Interrupt request bits read (intreq)")	\
-  o(0xdff020, "W-", DSKPTH,  "Disk track buffer pointer (high 5 bits)") \
-  o(0xdff022, "W-", DSKPTL,  "Disk track buffer pointer (low 15 bits)") \
-  o(0xdff024, "W-", DSKLEN,  "Disk track buffer length")		\
-  o(0xdff026, "W-", DSKDAT,  "Disk DMA data write")			\
-  o(0xdff028, "W-", REFPTR,  "AGA: Refresh pointer")			\
-  o(0xdff02a, "W-", VPOSW,   "Write vert most sig. bits (and frame flop)") \
-  o(0xdff02c, "W-", VHPOSW,  "Write vert and horiz pos of beam")	\
-  o(0xdff02e, "W-", COPCON,  "Coprocessor control register (CDANG)")	\
-  o(0xdff030, "W-", SERDAT,  "Serial port data and stop bits write")	\
-  o(0xdff032, "W-", SERPER,  "Serial port period and control")		\
-  o(0xdff034, "W-", POTGO,   "Pot count start, pot pin drive enable data") \
-  o(0xdff036, "W-", JOYTEST, "Write to all 4 joystick/mouse counters at once") \
-  o(0xdff038, "S-", STREQU,  "Strobe for horiz sync with VBLANK and EQU") \
-  o(0xdff03a, "S-", STRVBL,  "Strobe for horiz sync with VBLANK")	\
-  o(0xdff03c, "S-", STRHOR,  "Strobe for horiz sync")			\
-  o(0xdff03e, "S-", STRLONG, "Strobe for identification of long/short horiz line") \
-  o(0xdff040, "W-", BLTCON0, "Blitter control reg 0")			\
-  o(0xdff042, "W-", BLTCON1, "Blitter control reg 1")			\
-  o(0xdff044, "W-", BLTAFWM, "Blitter first word mask for source A")	\
-  o(0xdff046, "W-", BLTALWM, "Blitter last word mask for source A")	\
-  o(0xdff048, "W-", BLTCPTH, "Blitter pointer to source C (high 5 bits)") \
-  o(0xdff04a, "W-", BLTCPTL, "Blitter pointer to source C (low 15 bits)") \
-  o(0xdff04c, "W-", BLTBPTH, "Blitter pointer to source B (high 5 bits)") \
-  o(0xdff04e, "W-", BLTBPTL, "Blitter pointer to source B (low 15 bits)") \
-  o(0xdff050, "W-", BLTAPTH, "Blitter pointer to source A (high 5 bits)") \
-  o(0xdff052, "W-", BLTAPTL, "Blitter pointer to source A (low 15 bits)") \
-  o(0xdff054, "W-", BLTDPTH, "Blitter pointer to destination D (high 5 bits)") \
-  o(0xdff056, "W-", BLTDPTL, "Blitter pointer to destination D (low 15 bits)") \
-  o(0xdff058, "W-", BLTSIZE, "Blitter start and size (win/width, height)") \
-  o(0xdff05a, "W-", BLTCON0L, "Blitter control 0 lower 8 bits (minterms)") \
-  o(0xdff05c, "W-", BLTSIZV, "Blitter V size (for 15 bit vert size)")	\
-  o(0xdff05e, "W-", BLTSIZH, "ECS: Blitter H size & start (for 11 bit H size)") \
-  o(0xdff060, "W-", BLTCMOD, "Blitter modulo for source C")		\
-  o(0xdff062, "W-", BLTBMOD, "Blitter modulo for source B")		\
-  o(0xdff064, "W-", BLTAMOD, "Blitter modulo for source A")		\
-  o(0xdff066, "W-", BLTDMOD, "Blitter modulo for destination D")	\
-  o(0xdff070, "W-", BLTCDAT, "Blitter source C data reg")		\
-  o(0xdff072, "W-", BLTBDAT, "Blitter source B data reg")		\
-  o(0xdff074, "W-", BLTADAT, "Blitter source A data reg")		\
-  o(0xdff078, "W-", SPRHDAT, "AGA: Ext logic UHRES sprite pointer and data identifier") \
-  o(0xdff07a, "W-", BPLHDAT, "AGA: Ext logic UHRES bit plane identifier") \
-  o(0xdff07c, "W-", LISAID, "AGA: Chip revision level for Denise/Lisa") \
-  o(0xdff07e, "W-", DSKSYNC, "Disk sync pattern")			\
-  o(0xdff080, "W-", COP1LCH, "Write Copper pointer 1 (high 5 bits)")	\
-  o(0xdff082, "W-", COP1LCL, "Write Copper pointer 1 (low 15 bits)")	\
-  o(0xdff084, "W-", COP2LCH, "Write Copper pointer 2 (high 5 bits)")	\
-  o(0xdff086, "W-", COP2LCL, "Write Copper pointer 2 (low 15 bits)")	\
-  o(0xdff088, "S-", COPJMP1, "Trigger Copper 1 (any value)")		\
-  o(0xdff08a, "S-", COPJMP2, "Trigger Copper 2 (any value)")		\
-  o(0xdff08c, "W-", COPINS, "Coprocessor inst fetch identify")		\
-  o(0xdff08e, "W-", DIWSTRT, "Display window start (upper left vert-hor pos)") \
-  o(0xdff090, "W-", DIWSTOP, "Display window stop (lower right vert-hor pos)") \
-  o(0xdff092, "W-", DDFSTRT, "Display bitplane data fetch start.hor pos") \
-  o(0xdff094, "W-", DDFSTOP, "Display bitplane data fetch stop.hor pos") \
-  o(0xdff096, "W-", DMACON, "DMA control write (clear or set)")		\
-  o(0xdff098, "W-", CLXCON, "Write Sprite collision control bits")	\
-  o(0xdff09a, "W-", INTENA, "Interrupt enable bits (clear or set bits)") \
-  o(0xdff09c, "W-", INTREQ, "Interrupt request bits (clear or set bits)") \
-  o(0xdff09e, "W-", ADKCON, "Audio, disk and UART control")		\
-  o(0xdff0a0, "W-", AUD0LCH, "Audio channel 0 pointer (high 5 bits)")	\
-  o(0xdff0a2, "W-", AUD0LCL, "Audio channel 0 pointer (low 15 bits)")	\
-  o(0xdff0a4, "W-", AUD0LEN, "Audio channel 0 length")			\
-  o(0xdff0a6, "W-", AUD0PER, "Audio channel 0 period")			\
-  o(0xdff0a8, "W-", AUD0VOL, "Audio channel 0 volume")			\
-  o(0xdff0aa, "W-", AUD0DAT, "Audio channel 0 data")			\
-  o(0xdff0b0, "W-", AUD1LCH, "Audio channel 1 pointer (high 5 bits)")	\
-  o(0xdff0b2, "W-", AUD1LCL, "Audio channel 1 pointer (low 15 bits)")	\
-  o(0xdff0b4, "W-", AUD1LEN, "Audio channel 1 length")			\
-  o(0xdff0b6, "W-", AUD1PER, "Audio channel 1 period")			\
-  o(0xdff0b8, "W-", AUD1VOL, "Audio channel 1 volume")			\
-  o(0xdff0ba, "W-", AUD1DAT, "Audio channel 1 data")			\
-  o(0xdff0c0, "W-", AUD2LCH, "Audio channel 2 pointer (high 5 bits)")	\
-  o(0xdff0c2, "W-", AUD2LCL, "Audio channel 2 pointer (low 15 bits)")	\
-  o(0xdff0c4, "W-", AUD2LEN, "Audio channel 2 length")			\
-  o(0xdff0c6, "W-", AUD2PER, "Audio channel 2 period")			\
-  o(0xdff0c8, "W-", AUD2VOL, "Audio channel 2 volume")			\
-  o(0xdff0ca, "W-", AUD2DAT, "Audio channel 2 data")			\
-  o(0xdff0d0, "W-", AUD3LCH, "Audio channel 3 pointer (high 5 bits)")	\
-  o(0xdff0d2, "W-", AUD3LCL, "Audio channel 3 pointer (low 15 bits)")	\
-  o(0xdff0d4, "W-", AUD3LEN, "Audio channel 3 length")			\
-  o(0xdff0d6, "W-", AUD3PER, "Audio channel 3 period")			\
-  o(0xdff0d8, "W-", AUD3VOL, "Audio channel 3 volume")			\
-  o(0xdff0da, "W-", AUD3DAT, "Audio channel 3 data")			\
-  o(0xdff0e0, "W-", BPL1PTH, "Bitplane pointer 1 (high 5 bits)")	\
-  o(0xdff0e2, "W-", BPL1PTL, "Bitplane pointer 1 (low 15 bits)")	\
-  o(0xdff0e4, "W-", BPL2PTH, "Bitplane pointer 2 (high 5 bits)")	\
-  o(0xdff0e6, "W-", BPL2PTL, "Bitplane pointer 2 (low 15 bits)")	\
-  o(0xdff0e8, "W-", BPL3PTH, "Bitplane pointer 3 (high 5 bits)")	\
-  o(0xdff0ea, "W-", BPL3PTL, "Bitplane pointer 3 (low 15 bits)")	\
-  o(0xdff0ec, "W-", BPL4PTH, "Bitplane pointer 4 (high 5 bits)")	\
-  o(0xdff0ee, "W-", BPL4PTL, "Bitplane pointer 4 (low 15 bits)")	\
-  o(0xdff0f0, "W-", BPL5PTH, "Bitplane pointer 5 (high 5 bits)")	\
-  o(0xdff0f2, "W-", BPL5PTL, "Bitplane pointer 5 (low 15 bits)")	\
-  o(0xdff0f4, "W-", BPL6PTH, "Bitplane pointer 6 (high 5 bits)")	\
-  o(0xdff0f6, "W-", BPL6PTL, "Bitplane pointer 6 (low 15 bits)")	\
-  o(0xdff0f8, "W-", BPL7PTH, "AGA: Bitplane pointer 7 (high 5 bits)")	\
-  o(0xdff0fa, "W-", BPL7PTL, "AGA: Bitplane pointer 7 (low 15 bits)")	\
-  o(0xdff0fc, "W-", BPL8PTH, "AGA: Bitplane pointer 8 (high 5 bits)")	\
-  o(0xdff0fe, "W-", BPL8PTL, "AGA: Bitplane pointer 8 (low 15 bits)")	\
-  o(0xdff100, "W-", BPLCON0, "Bitplane depth and screen mode)")		\
-  o(0xdff102, "W-", BPLCON1, "Bitplane/playfield horizontal scroll values") \
-  o(0xdff104, "W-", BPLCON2, "Sprites vs. Playfields priority")		\
-  o(0xdff106, "W-", BPLCON3, "AGA: Bitplane control reg (enhanced features)") \
-  o(0xdff108, "W-", BPL1MOD, "Bitplane modulo (odd planes)")		\
-  o(0xdff10a, "W-", BPL2MOD, "Bitplane modulo (even planes)")		\
-  o(0xdff10c, "W-", BPLCON4, "AGA: Bitplane control reg (bitplane & sprite masks)") \
-  o(0xdff10e, "W-", CLXCON2, "AGA: Write Extended sprite collision control bits") \
-  o(0xdff110, "W-", BPL1DAT, "Bitplane 1 data (parallel to serial convert)") \
-  o(0xdff112, "W-", BPL2DAT, "Bitplane 2 data (parallel to serial convert)") \
-  o(0xdff114, "W-", BPL3DAT, "Bitplane 3 data (parallel to serial convert)") \
-  o(0xdff116, "W-", BPL4DAT, "Bitplane 4 data (parallel to serial convert)") \
-  o(0xdff118, "W-", BPL5DAT, "Bitplane 5 data (parallel to serial convert)") \
-  o(0xdff11a, "W-", BPL6DAT, "Bitplane 6 data (parallel to serial convert)") \
-  o(0xdff11c, "W-", BPL7DAT, "AGA: Bitplane 7 data (parallel to serial convert)") \
-  o(0xdff11e, "W-", BPL8DAT, "AGA: Bitplane 8 data (parallel to serial convert)") \
-  o(0xdff120, "W-", SPR0PTH, "Sprite 0 pointer (high 5 bits)")		\
-  o(0xdff122, "W-", SPR0PTL, "Sprite 0 pointer (low 15 bits)")		\
-  o(0xdff124, "W-", SPR1PTH, "Sprite 1 pointer (high 5 bits)")		\
-  o(0xdff126, "W-", SPR1PTL, "Sprite 1 pointer (low 15 bits)")		\
-  o(0xdff128, "W-", SPR2PTH, "Sprite 2 pointer (high 5 bits)")		\
-  o(0xdff12a, "W-", SPR2PTL, "Sprite 2 pointer (low 15 bits)")		\
-  o(0xdff12c, "W-", SPR3PTH, "Sprite 3 pointer (high 5 bits)")		\
-  o(0xdff12e, "W-", SPR3PTL, "Sprite 3 pointer (low 15 bits)")		\
-  o(0xdff130, "W-", SPR4PTH, "Sprite 4 pointer (high 5 bits)")		\
-  o(0xdff132, "W-", SPR4PTL, "Sprite 4 pointer (low 15 bits)")		\
-  o(0xdff134, "W-", SPR5PTH, "Sprite 5 pointer (high 5 bits)")		\
-  o(0xdff136, "W-", SPR5PTL, "Sprite 5 pointer (low 15 bits)")		\
-  o(0xdff138, "W-", SPR6PTH, "Sprite 6 pointer (high 5 bits)")		\
-  o(0xdff13a, "W-", SPR6PTL, "Sprite 6 pointer (low 15 bits)")		\
-  o(0xdff13c, "W-", SPR7PTH, "Sprite 7 pointer (high 5 bits)")		\
-  o(0xdff13e, "W-", SPR7PTL, "Sprite 7 pointer (low 15 bits)")		\
-  o(0xdff140, "W-", SPR0POS, "Sprite 0 vert-horiz start pos data")	\
-  o(0xdff142, "W-", SPR0CTL, "Sprite 0 position and control data")	\
-  o(0xdff144, "W-", SPR0DATA, "Sprite 0 low bitplane data")		\
-  o(0xdff146, "W-", SPR0DATB, "Sprite 0 high bitplane data")		\
-  o(0xdff148, "W-", SPR1POS, "Sprite 1 vert-horiz start pos data")	\
-  o(0xdff14a, "W-", SPR1CTL, "Sprite 1 position and control data")	\
-  o(0xdff14c, "W-", SPR1DATA, "Sprite 1 low bitplane data")		\
-  o(0xdff14e, "W-", SPR1DATB, "Sprite 1 high bitplane data")		\
-  o(0xdff150, "W-", SPR2POS, "Sprite 2 vert-horiz start pos data")	\
-  o(0xdff152, "W-", SPR2CTL, "Sprite 2 position and control data")	\
-  o(0xdff154, "W-", SPR2DATA, "Sprite 2 low bitplane data")		\
-  o(0xdff156, "W-", SPR2DATB, "Sprite 2 high bitplane data")		\
-  o(0xdff158, "W-", SPR3POS, "Sprite 3 vert-horiz start pos data")	\
-  o(0xdff15a, "W-", SPR3CTL, "Sprite 3 position and control data")	\
-  o(0xdff15c, "W-", SPR3DATA, "Sprite 3 low bitplane data")		\
-  o(0xdff15e, "W-", SPR3DATB, "Sprite 3 high bitplane data")		\
-  o(0xdff160, "W-", SPR4POS, "Sprite 4 vert-horiz start pos data")	\
-  o(0xdff162, "W-", SPR4CTL, "Sprite 4 position and control data")	\
-  o(0xdff164, "W-", SPR4DATA, "Sprite 4 low bitplane data")		\
-  o(0xdff166, "W-", SPR4DATB, "Sprite 4 high bitplane data")		\
-  o(0xdff168, "W-", SPR5POS, "Sprite 5 vert-horiz start pos data")	\
-  o(0xdff16a, "W-", SPR5CTL, "Sprite 5 position and control data")	\
-  o(0xdff16c, "W-", SPR5DATA, "Sprite 5 low bitplane data")		\
-  o(0xdff16e, "W-", SPR5DATB, "Sprite 5 high bitplane data")		\
-  o(0xdff170, "W-", SPR6POS, "Sprite 6 vert-horiz start pos data")	\
-  o(0xdff172, "W-", SPR6CTL, "Sprite 6 position and control data")	\
-  o(0xdff174, "W-", SPR6DATA, "Sprite 6 low bitplane data")		\
-  o(0xdff176, "W-", SPR6DATB, "Sprite 6 high bitplane data")		\
-  o(0xdff178, "W-", SPR7POS, "Sprite 7 vert-horiz start pos data")	\
-  o(0xdff17a, "W-", SPR7CTL, "Sprite 7 position and control data")	\
-  o(0xdff17c, "W-", SPR7DATA, "Sprite 7 low bitplane data")		\
-  o(0xdff17e, "W-", SPR7DATB, "Sprite 7 high bitplane data")		\
-  o(0xdff180, "W-", COLOR00, "Palette color 00")			\
-  o(0xdff182, "W-", COLOR01, "Palette color 1")				\
-  o(0xdff184, "W-", COLOR02, "Palette color 2")				\
-  o(0xdff186, "W-", COLOR03, "Palette color 3")				\
-  o(0xdff188, "W-", COLOR04, "Palette color 4")				\
-  o(0xdff18a, "W-", COLOR05, "Palette color 5")				\
-  o(0xdff18c, "W-", COLOR06, "Palette color 6")				\
-  o(0xdff18e, "W-", COLOR07, "Palette color 7")				\
-  o(0xdff190, "W-", COLOR08, "Palette color 8")				\
-  o(0xdff192, "W-", COLOR09, "Palette color 9")				\
-  o(0xdff194, "W-", COLOR10, "Palette color 10")			\
-  o(0xdff196, "W-", COLOR11, "Palette color 11")			\
-  o(0xdff198, "W-", COLOR12, "Palette color 12")			\
-  o(0xdff19a, "W-", COLOR13, "Palette color 13")			\
-  o(0xdff19c, "W-", COLOR14, "Palette color 14")			\
-  o(0xdff19e, "W-", COLOR15, "Palette color 15")			\
-  o(0xdff1a0, "W-", COLOR16, "Palette color 16")			\
-  o(0xdff1a2, "W-", COLOR17, "Palette color 17")			\
-  o(0xdff1a4, "W-", COLOR18, "Palette color 18")			\
-  o(0xdff1a6, "W-", COLOR19, "Palette color 19")			\
-  o(0xdff1a8, "W-", COLOR20, "Palette color 20")			\
-  o(0xdff1aa, "W-", COLOR21, "Palette color 21")			\
-  o(0xdff1ac, "W-", COLOR22, "Palette color 22")			\
-  o(0xdff1ae, "W-", COLOR23, "Palette color 23")			\
-  o(0xdff1b0, "W-", COLOR24, "Palette color 24")			\
-  o(0xdff1b2, "W-", COLOR25, "Palette color 25")			\
-  o(0xdff1b4, "W-", COLOR26, "Palette color 26")			\
-  o(0xdff1b6, "W-", COLOR27, "Palette color 27")			\
-  o(0xdff1b8, "W-", COLOR28, "Palette color 28")			\
-  o(0xdff1ba, "W-", COLOR29, "Palette color 29")			\
-  o(0xdff1bc, "W-", COLOR30, "Palette color 30")			\
-  o(0xdff1be, "W-", COLOR31, "Palette color 31")			\
-  o(0xdff1c0, "W-", HTOTAL, "AGA: Highest number count in horiz line (VARBEAMEN = 1)") \
-  o(0xdff1c2, "W-", HSSTOP, "AGA: Horiz line pos for HSYNC stop")	\
-  o(0xdff1c4, "W-", HBSTRT, "AGA: Horiz line pos for HBLANK start")	\
-  o(0xdff1c6, "W-", HBSTOP, "AGA: Horiz line pos for HBLANK stop")	\
-  o(0xdff1c8, "W-", VTOTAL, "AGA: Highest numbered vertical line (VARBEAMEN = 1)") \
-  o(0xdff1ca, "W-", VSSTOP, "AGA: Vert line for Vsync stop")		\
-  o(0xdff1cc, "W-", VBSTRT, "AGA: Vert line for VBLANK start")		\
-  o(0xdff1ce, "W-", VBSTOP, "AGA: Vert line for VBLANK stop")		\
-  o(0xdff1d0, "W-", SPRHSTRT, "AGA: UHRES sprite vertical start")	\
-  o(0xdff1d2, "W-", SPRHSTOP, "AGA: UHRES sprite vertical stop")	\
-  o(0xdff1d4, "W-", BPLHSTRT, "AGA: UHRES bit plane vertical start")	\
-  o(0xdff1d6, "W-", BPLHSTOP, "AGA: UHRES bit plane vertical stop")	\
-  o(0xdff1d8, "W-", HHPOSW, "AGA: DUAL mode hires H beam counter write") \
-  o(0xdff1da, "W-", HHPOSR, "AGA: DUAL mode hires H beam counter read") \
-  o(0xdff1dc, "W-", BEAMCON0, "Beam counter control register")		\
-  o(0xdff1de, "W-", HSSTRT, "AGA: Horizontal sync start (VARHSY)")	\
-  o(0xdff1e0, "W-", VSSTRT, "AGA: Vertical sync start (VARVSY)")	\
-  o(0xdff1e2, "W-", HCENTER, "AGA: Horizontal pos for vsync on interlace") \
-  o(0xdff1e4, "W-", DIWHIGH, "AGA: Display window upper bits for start/stop") \
-  o(0xdff1e6, "W-", BPLHMOD, "AGA: UHRES bit plane modulo")		\
-  o(0xdff1e8, "W-", SPRHPTH, "AGA: UHRES sprite pointer (high 5 bits)") \
-  o(0xdff1ea, "W-", SPRHPTL, "AGA: UHRES sprite pointer (low 15 bits)") \
-  o(0xdff1ec, "W-", BPLHPTH, "AGA: VRam (UHRES) bitplane pointer (high 5 bits)") \
-  o(0xdff1ee, "W-", BPLHPTL, "AGA: VRam (UHRES) bitplane pointer (low 15 bits)") \
-  o(0xdff1fc, "W-", FMODE, "AGA: Write Fetch mode (0=OCS compatible)")	\
-  o(0xdff1fe, "W-", CUSTOM_NOOP, "No operation/NULL (Copper NOP instruction)") 
+  o(0xDFF000, "ER", BLTDDAT, "Blitter destination early read (unusable)") \
+  o(0xDFF002, "R-", DMACONR, "DMA control (and blitter status) read")	\
+  o(0xDFF004, "R-", VPOSR,   "Read vertical raster position bit 9 (and interlace odd/even frame)") \
+  o(0xDFF006, "R-", VHPOSR,  "Rest of raster XY position - High byte: vertical, low byte: horizontal") \
+  o(0xDFF008, "ER", DSKDATR, "Disk data early read (unusable)")		\
+  o(0xDFF00A, "R-", JOY0DAT, "Joystick/mouse 0 data")			\
+  o(0xDFF00C, "R-", JOY1DAT, "Joystick/mouse 1 data")			\
+  o(0xDFF00E, "R-", CLXDAT,  "Poll (read and clear) sprite collision state") \
+  o(0xDFF010, "R-", ADKCONR, "Audio, disk control register read")	\
+  o(0xDFF012, "R-", POT0DAT, "Pot counter pair 0 data")			\
+  o(0xDFF014, "R-", POT1DAT, "Pot counter pair 1 data")			\
+  o(0xDFF016, "R-", POTGOR,  "Pot pin data read")			\
+  o(0xDFF018, "R-", SERDATR, "Serial port data and status read")	\
+  o(0xDFF01A, "R-", DSKBYTR, "Disk data byte and status read")		\
+  o(0xDFF01C, "R-", INTENAR, "Interrupt enable bits read (intena)")	\
+  o(0xDFF01E, "R-", INTREQR, "Interrupt request bits read (intreq)")	\
+  o(0xDFF020, "W-", DSKPTH,  "Disk track buffer pointer (high 5 bits)") \
+  o(0xDFF022, "W-", DSKPTL,  "Disk track buffer pointer (low 15 bits)") \
+  o(0xDFF024, "W-", DSKLEN,  "Disk track buffer length")		\
+  o(0xDFF026, "W-", DSKDAT,  "Disk DMA data write")			\
+  o(0xDFF028, "W-", REFPTR,  "AGA: Refresh pointer")			\
+  o(0xDFF02A, "W-", VPOSW,   "Write vert most sig. bits (and frame flop)") \
+  o(0xDFF02C, "W-", VHPOSW,  "Write vert and horiz pos of beam")	\
+  o(0xDFF02E, "W-", COPCON,  "Coprocessor control register (CDANG)")	\
+  o(0xDFF030, "W-", SERDAT,  "Serial port data and stop bits write")	\
+  o(0xDFF032, "W-", SERPER,  "Serial port period and control")		\
+  o(0xDFF034, "W-", POTGO,   "Pot count start, pot pin drive enable data") \
+  o(0xDFF036, "W-", JOYTEST, "Write to all 4 joystick/mouse counters at once") \
+  o(0xDFF038, "S-", STREQU,  "Strobe for horiz sync with VBLANK and EQU") \
+  o(0xDFF03A, "S-", STRVBL,  "Strobe for horiz sync with VBLANK")	\
+  o(0xDFF03C, "S-", STRHOR,  "Strobe for horiz sync")			\
+  o(0xDFF03E, "S-", STRLONG, "Strobe for identification of long/short horiz line") \
+  o(0xDFF040, "W-", BLTCON0, "Blitter control reg 0")			\
+  o(0xDFF042, "W-", BLTCON1, "Blitter control reg 1")			\
+  o(0xDFF044, "W-", BLTAFWM, "Blitter first word mask for source A")	\
+  o(0xDFF046, "W-", BLTALWM, "Blitter last word mask for source A")	\
+  o(0xDFF048, "W-", BLTCPTH, "Blitter pointer to source C (high 5 bits)") \
+  o(0xDFF04A, "W-", BLTCPTL, "Blitter pointer to source C (low 15 bits)") \
+  o(0xDFF04C, "W-", BLTBPTH, "Blitter pointer to source B (high 5 bits)") \
+  o(0xDFF04E, "W-", BLTBPTL, "Blitter pointer to source B (low 15 bits)") \
+  o(0xDFF050, "W-", BLTAPTH, "Blitter pointer to source A (high 5 bits)") \
+  o(0xDFF052, "W-", BLTAPTL, "Blitter pointer to source A (low 15 bits)") \
+  o(0xDFF054, "W-", BLTDPTH, "Blitter pointer to destination D (high 5 bits)") \
+  o(0xDFF056, "W-", BLTDPTL, "Blitter pointer to destination D (low 15 bits)") \
+  o(0xDFF058, "W-", BLTSIZE, "Blitter start and size (win/width, height)") \
+  o(0xDFF05A, "W-", BLTCON0L, "Blitter control 0 lower 8 bits (minterms)") \
+  o(0xDFF05C, "W-", BLTSIZV, "Blitter V size (for 15 bit vert size)")	\
+  o(0xDFF05E, "W-", BLTSIZH, "ECS: Blitter H size & start (for 11 bit H size)") \
+  o(0xDFF060, "W-", BLTCMOD, "Blitter modulo for source C")		\
+  o(0xDFF062, "W-", BLTBMOD, "Blitter modulo for source B")		\
+  o(0xDFF064, "W-", BLTAMOD, "Blitter modulo for source A")		\
+  o(0xDFF066, "W-", BLTDMOD, "Blitter modulo for destination D")	\
+  o(0xDFF070, "W-", BLTCDAT, "Blitter source C data reg")		\
+  o(0xDFF072, "W-", BLTBDAT, "Blitter source B data reg")		\
+  o(0xDFF074, "W-", BLTADAT, "Blitter source A data reg")		\
+  o(0xDFF078, "W-", SPRHDAT, "AGA: Ext logic UHRES sprite pointer and data identifier") \
+  o(0xDFF07A, "W-", BPLHDAT, "AGA: Ext logic UHRES bit plane identifier") \
+  o(0xDFF07C, "W-", LISAID, "AGA: Chip revision level for Denise/Lisa") \
+  o(0xDFF07E, "W-", DSKSYNC, "Disk sync pattern")			\
+  o(0xDFF080, "W-", COP1LCH, "Write Copper pointer 1 (high 5 bits)")	\
+  o(0xDFF082, "W-", COP1LCL, "Write Copper pointer 1 (low 15 bits)")	\
+  o(0xDFF084, "W-", COP2LCH, "Write Copper pointer 2 (high 5 bits)")	\
+  o(0xDFF086, "W-", COP2LCL, "Write Copper pointer 2 (low 15 bits)")	\
+  o(0xDFF088, "S-", COPJMP1, "Trigger Copper 1 (any value)")		\
+  o(0xDFF08A, "S-", COPJMP2, "Trigger Copper 2 (any value)")		\
+  o(0xDFF08C, "W-", COPINS, "Coprocessor inst fetch identify")		\
+  o(0xDFF08E, "W-", DIWSTRT, "Display window start (upper left vert-hor pos)") \
+  o(0xDFF090, "W-", DIWSTOP, "Display window stop (lower right vert-hor pos)") \
+  o(0xDFF092, "W-", DDFSTRT, "Display bitplane data fetch start.hor pos") \
+  o(0xDFF094, "W-", DDFSTOP, "Display bitplane data fetch stop.hor pos") \
+  o(0xDFF096, "W-", DMACON, "DMA control write (clear or set)")		\
+  o(0xDFF098, "W-", CLXCON, "Write Sprite collision control bits")	\
+  o(0xDFF09A, "W-", INTENA, "Interrupt enable bits (clear or set bits)") \
+  o(0xDFF09C, "W-", INTREQ, "Interrupt request bits (clear or set bits)") \
+  o(0xDFF09E, "W-", ADKCON, "Audio, disk and UART control")		\
+  o(0xDFF0A0, "W-", AUD0LCH, "Audio channel 0 pointer (high 5 bits)")	\
+  o(0xDFF0A2, "W-", AUD0LCL, "Audio channel 0 pointer (low 15 bits)")	\
+  o(0xDFF0A4, "W-", AUD0LEN, "Audio channel 0 length")			\
+  o(0xDFF0A6, "W-", AUD0PER, "Audio channel 0 period")			\
+  o(0xDFF0A8, "W-", AUD0VOL, "Audio channel 0 volume")			\
+  o(0xDFF0AA, "W-", AUD0DAT, "Audio channel 0 data")			\
+  o(0xDFF0B0, "W-", AUD1LCH, "Audio channel 1 pointer (high 5 bits)")	\
+  o(0xDFF0B2, "W-", AUD1LCL, "Audio channel 1 pointer (low 15 bits)")	\
+  o(0xDFF0B4, "W-", AUD1LEN, "Audio channel 1 length")			\
+  o(0xDFF0B6, "W-", AUD1PER, "Audio channel 1 period")			\
+  o(0xDFF0B8, "W-", AUD1VOL, "Audio channel 1 volume")			\
+  o(0xDFF0BA, "W-", AUD1DAT, "Audio channel 1 data")			\
+  o(0xDFF0C0, "W-", AUD2LCH, "Audio channel 2 pointer (high 5 bits)")	\
+  o(0xDFF0C2, "W-", AUD2LCL, "Audio channel 2 pointer (low 15 bits)")	\
+  o(0xDFF0C4, "W-", AUD2LEN, "Audio channel 2 length")			\
+  o(0xDFF0C6, "W-", AUD2PER, "Audio channel 2 period")			\
+  o(0xDFF0C8, "W-", AUD2VOL, "Audio channel 2 volume")			\
+  o(0xDFF0CA, "W-", AUD2DAT, "Audio channel 2 data")			\
+  o(0xDFF0D0, "W-", AUD3LCH, "Audio channel 3 pointer (high 5 bits)")	\
+  o(0xDFF0D2, "W-", AUD3LCL, "Audio channel 3 pointer (low 15 bits)")	\
+  o(0xDFF0D4, "W-", AUD3LEN, "Audio channel 3 length")			\
+  o(0xDFF0D6, "W-", AUD3PER, "Audio channel 3 period")			\
+  o(0xDFF0D8, "W-", AUD3VOL, "Audio channel 3 volume")			\
+  o(0xDFF0DA, "W-", AUD3DAT, "Audio channel 3 data")			\
+  o(0xDFF0E0, "W-", BPL1PTH, "Bitplane pointer 1 (high 5 bits)")	\
+  o(0xDFF0E2, "W-", BPL1PTL, "Bitplane pointer 1 (low 15 bits)")	\
+  o(0xDFF0E4, "W-", BPL2PTH, "Bitplane pointer 2 (high 5 bits)")	\
+  o(0xDFF0E6, "W-", BPL2PTL, "Bitplane pointer 2 (low 15 bits)")	\
+  o(0xDFF0E8, "W-", BPL3PTH, "Bitplane pointer 3 (high 5 bits)")	\
+  o(0xDFF0EA, "W-", BPL3PTL, "Bitplane pointer 3 (low 15 bits)")	\
+  o(0xDFF0EC, "W-", BPL4PTH, "Bitplane pointer 4 (high 5 bits)")	\
+  o(0xDFF0EE, "W-", BPL4PTL, "Bitplane pointer 4 (low 15 bits)")	\
+  o(0xDFF0F0, "W-", BPL5PTH, "Bitplane pointer 5 (high 5 bits)")	\
+  o(0xDFF0F2, "W-", BPL5PTL, "Bitplane pointer 5 (low 15 bits)")	\
+  o(0xDFF0F4, "W-", BPL6PTH, "Bitplane pointer 6 (high 5 bits)")	\
+  o(0xDFF0F6, "W-", BPL6PTL, "Bitplane pointer 6 (low 15 bits)")	\
+  o(0xDFF0F8, "W-", BPL7PTH, "AGA: Bitplane pointer 7 (high 5 bits)")	\
+  o(0xDFF0FA, "W-", BPL7PTL, "AGA: Bitplane pointer 7 (low 15 bits)")	\
+  o(0xDFF0FC, "W-", BPL8PTH, "AGA: Bitplane pointer 8 (high 5 bits)")	\
+  o(0xDFF0FE, "W-", BPL8PTL, "AGA: Bitplane pointer 8 (low 15 bits)")	\
+  o(0xDFF100, "W-", BPLCON0, "Bitplane depth and screen mode)")		\
+  o(0xDFF102, "W-", BPLCON1, "Bitplane/playfield horizontal scroll values") \
+  o(0xDFF104, "W-", BPLCON2, "Sprites vs. Playfields priority")		\
+  o(0xDFF106, "W-", BPLCON3, "AGA: Bitplane control reg (enhanced features)") \
+  o(0xDFF108, "W-", BPL1MOD, "Bitplane modulo (odd planes)")		\
+  o(0xDFF10A, "W-", BPL2MOD, "Bitplane modulo (even planes)")		\
+  o(0xDFF10C, "W-", BPLCON4, "AGA: Bitplane control reg (bitplane & sprite masks)") \
+  o(0xDFF10E, "W-", CLXCON2, "AGA: Write Extended sprite collision control bits") \
+  o(0xDFF110, "W-", BPL1DAT, "Bitplane 1 data (parallel to serial convert)") \
+  o(0xDFF112, "W-", BPL2DAT, "Bitplane 2 data (parallel to serial convert)") \
+  o(0xDFF114, "W-", BPL3DAT, "Bitplane 3 data (parallel to serial convert)") \
+  o(0xDFF116, "W-", BPL4DAT, "Bitplane 4 data (parallel to serial convert)") \
+  o(0xDFF118, "W-", BPL5DAT, "Bitplane 5 data (parallel to serial convert)") \
+  o(0xDFF11A, "W-", BPL6DAT, "Bitplane 6 data (parallel to serial convert)") \
+  o(0xDFF11C, "W-", BPL7DAT, "AGA: Bitplane 7 data (parallel to serial convert)") \
+  o(0xDFF11E, "W-", BPL8DAT, "AGA: Bitplane 8 data (parallel to serial convert)") \
+  o(0xDFF120, "W-", SPR0PTH, "Sprite 0 pointer (high 5 bits)")		\
+  o(0xDFF122, "W-", SPR0PTL, "Sprite 0 pointer (low 15 bits)")		\
+  o(0xDFF124, "W-", SPR1PTH, "Sprite 1 pointer (high 5 bits)")		\
+  o(0xDFF126, "W-", SPR1PTL, "Sprite 1 pointer (low 15 bits)")		\
+  o(0xDFF128, "W-", SPR2PTH, "Sprite 2 pointer (high 5 bits)")		\
+  o(0xDFF12A, "W-", SPR2PTL, "Sprite 2 pointer (low 15 bits)")		\
+  o(0xDFF12C, "W-", SPR3PTH, "Sprite 3 pointer (high 5 bits)")		\
+  o(0xDFF12E, "W-", SPR3PTL, "Sprite 3 pointer (low 15 bits)")		\
+  o(0xDFF130, "W-", SPR4PTH, "Sprite 4 pointer (high 5 bits)")		\
+  o(0xDFF132, "W-", SPR4PTL, "Sprite 4 pointer (low 15 bits)")		\
+  o(0xDFF134, "W-", SPR5PTH, "Sprite 5 pointer (high 5 bits)")		\
+  o(0xDFF136, "W-", SPR5PTL, "Sprite 5 pointer (low 15 bits)")		\
+  o(0xDFF138, "W-", SPR6PTH, "Sprite 6 pointer (high 5 bits)")		\
+  o(0xDFF13A, "W-", SPR6PTL, "Sprite 6 pointer (low 15 bits)")		\
+  o(0xDFF13C, "W-", SPR7PTH, "Sprite 7 pointer (high 5 bits)")		\
+  o(0xDFF13E, "W-", SPR7PTL, "Sprite 7 pointer (low 15 bits)")		\
+  o(0xDFF140, "W-", SPR0POS, "Sprite 0 vert-horiz start pos data")	\
+  o(0xDFF142, "W-", SPR0CTL, "Sprite 0 position and control data")	\
+  o(0xDFF144, "W-", SPR0DATA, "Sprite 0 low bitplane data")		\
+  o(0xDFF146, "W-", SPR0DATB, "Sprite 0 high bitplane data")		\
+  o(0xDFF148, "W-", SPR1POS, "Sprite 1 vert-horiz start pos data")	\
+  o(0xDFF14A, "W-", SPR1CTL, "Sprite 1 position and control data")	\
+  o(0xDFF14C, "W-", SPR1DATA, "Sprite 1 low bitplane data")		\
+  o(0xDFF14E, "W-", SPR1DATB, "Sprite 1 high bitplane data")		\
+  o(0xDFF150, "W-", SPR2POS, "Sprite 2 vert-horiz start pos data")	\
+  o(0xDFF152, "W-", SPR2CTL, "Sprite 2 position and control data")	\
+  o(0xDFF154, "W-", SPR2DATA, "Sprite 2 low bitplane data")		\
+  o(0xDFF156, "W-", SPR2DATB, "Sprite 2 high bitplane data")		\
+  o(0xDFF158, "W-", SPR3POS, "Sprite 3 vert-horiz start pos data")	\
+  o(0xDFF15A, "W-", SPR3CTL, "Sprite 3 position and control data")	\
+  o(0xDFF15C, "W-", SPR3DATA, "Sprite 3 low bitplane data")		\
+  o(0xDFF15E, "W-", SPR3DATB, "Sprite 3 high bitplane data")		\
+  o(0xDFF160, "W-", SPR4POS, "Sprite 4 vert-horiz start pos data")	\
+  o(0xDFF162, "W-", SPR4CTL, "Sprite 4 position and control data")	\
+  o(0xDFF164, "W-", SPR4DATA, "Sprite 4 low bitplane data")		\
+  o(0xDFF166, "W-", SPR4DATB, "Sprite 4 high bitplane data")		\
+  o(0xDFF168, "W-", SPR5POS, "Sprite 5 vert-horiz start pos data")	\
+  o(0xDFF16A, "W-", SPR5CTL, "Sprite 5 position and control data")	\
+  o(0xDFF16C, "W-", SPR5DATA, "Sprite 5 low bitplane data")		\
+  o(0xDFF16E, "W-", SPR5DATB, "Sprite 5 high bitplane data")		\
+  o(0xDFF170, "W-", SPR6POS, "Sprite 6 vert-horiz start pos data")	\
+  o(0xDFF172, "W-", SPR6CTL, "Sprite 6 position and control data")	\
+  o(0xDFF174, "W-", SPR6DATA, "Sprite 6 low bitplane data")		\
+  o(0xDFF176, "W-", SPR6DATB, "Sprite 6 high bitplane data")		\
+  o(0xDFF178, "W-", SPR7POS, "Sprite 7 vert-horiz start pos data")	\
+  o(0xDFF17A, "W-", SPR7CTL, "Sprite 7 position and control data")	\
+  o(0xDFF17C, "W-", SPR7DATA, "Sprite 7 low bitplane data")		\
+  o(0xDFF17E, "W-", SPR7DATB, "Sprite 7 high bitplane data")		\
+  o(0xDFF180, "W-", COLOR00, "Palette color 00")			\
+  o(0xDFF182, "W-", COLOR01, "Palette color 1")				\
+  o(0xDFF184, "W-", COLOR02, "Palette color 2")				\
+  o(0xDFF186, "W-", COLOR03, "Palette color 3")				\
+  o(0xDFF188, "W-", COLOR04, "Palette color 4")				\
+  o(0xDFF18A, "W-", COLOR05, "Palette color 5")				\
+  o(0xDFF18C, "W-", COLOR06, "Palette color 6")				\
+  o(0xDFF18E, "W-", COLOR07, "Palette color 7")				\
+  o(0xDFF190, "W-", COLOR08, "Palette color 8")				\
+  o(0xDFF192, "W-", COLOR09, "Palette color 9")				\
+  o(0xDFF194, "W-", COLOR10, "Palette color 10")			\
+  o(0xDFF196, "W-", COLOR11, "Palette color 11")			\
+  o(0xDFF198, "W-", COLOR12, "Palette color 12")			\
+  o(0xDFF19A, "W-", COLOR13, "Palette color 13")			\
+  o(0xDFF19C, "W-", COLOR14, "Palette color 14")			\
+  o(0xDFF19E, "W-", COLOR15, "Palette color 15")			\
+  o(0xDFF1a0, "W-", COLOR16, "Palette color 16")			\
+  o(0xDFF1a2, "W-", COLOR17, "Palette color 17")			\
+  o(0xDFF1a4, "W-", COLOR18, "Palette color 18")			\
+  o(0xDFF1a6, "W-", COLOR19, "Palette color 19")			\
+  o(0xDFF1a8, "W-", COLOR20, "Palette color 20")			\
+  o(0xDFF1aA, "W-", COLOR21, "Palette color 21")			\
+  o(0xDFF1aC, "W-", COLOR22, "Palette color 22")			\
+  o(0xDFF1aE, "W-", COLOR23, "Palette color 23")			\
+  o(0xDFF1b0, "W-", COLOR24, "Palette color 24")			\
+  o(0xDFF1b2, "W-", COLOR25, "Palette color 25")			\
+  o(0xDFF1b4, "W-", COLOR26, "Palette color 26")			\
+  o(0xDFF1b6, "W-", COLOR27, "Palette color 27")			\
+  o(0xDFF1b8, "W-", COLOR28, "Palette color 28")			\
+  o(0xDFF1bA, "W-", COLOR29, "Palette color 29")			\
+  o(0xDFF1bC, "W-", COLOR30, "Palette color 30")			\
+  o(0xDFF1bE, "W-", COLOR31, "Palette color 31")			\
+  o(0xDFF1c0, "W-", HTOTAL, "AGA: Highest number count in horiz line (VARBEAMEN = 1)") \
+  o(0xDFF1c2, "W-", HSSTOP, "AGA: Horiz line pos for HSYNC stop")	\
+  o(0xDFF1c4, "W-", HBSTRT, "AGA: Horiz line pos for HBLANK start")	\
+  o(0xDFF1c6, "W-", HBSTOP, "AGA: Horiz line pos for HBLANK stop")	\
+  o(0xDFF1c8, "W-", VTOTAL, "AGA: Highest numbered vertical line (VARBEAMEN = 1)") \
+  o(0xDFF1cA, "W-", VSSTOP, "AGA: Vert line for Vsync stop")		\
+  o(0xDFF1cC, "W-", VBSTRT, "AGA: Vert line for VBLANK start")		\
+  o(0xDFF1cE, "W-", VBSTOP, "AGA: Vert line for VBLANK stop")		\
+  o(0xDFF1d0, "W-", SPRHSTRT, "AGA: UHRES sprite vertical start")	\
+  o(0xDFF1d2, "W-", SPRHSTOP, "AGA: UHRES sprite vertical stop")	\
+  o(0xDFF1d4, "W-", BPLHSTRT, "AGA: UHRES bit plane vertical start")	\
+  o(0xDFF1d6, "W-", BPLHSTOP, "AGA: UHRES bit plane vertical stop")	\
+  o(0xDFF1d8, "W-", HHPOSW, "AGA: DUAL mode hires H beam counter write") \
+  o(0xDFF1dA, "W-", HHPOSR, "AGA: DUAL mode hires H beam counter read") \
+  o(0xDFF1dC, "W-", BEAMCON0, "Beam counter control register")		\
+  o(0xDFF1dE, "W-", HSSTRT, "AGA: Horizontal sync start (VARHSY)")	\
+  o(0xDFF1e0, "W-", VSSTRT, "AGA: Vertical sync start (VARVSY)")	\
+  o(0xDFF1e2, "W-", HCENTER, "AGA: Horizontal pos for vsync on interlace") \
+  o(0xDFF1e4, "W-", DIWHIGH, "AGA: Display window upper bits for start/stop") \
+  o(0xDFF1e6, "W-", BPLHMOD, "AGA: UHRES bit plane modulo")		\
+  o(0xDFF1e8, "W-", SPRHPTH, "AGA: UHRES sprite pointer (high 5 bits)") \
+  o(0xDFF1eA, "W-", SPRHPTL, "AGA: UHRES sprite pointer (low 15 bits)") \
+  o(0xDFF1eC, "W-", BPLHPTH, "AGA: VRam (UHRES) bitplane pointer (high 5 bits)") \
+  o(0xDFF1eE, "W-", BPLHPTL, "AGA: VRam (UHRES) bitplane pointer (low 15 bits)") \
+  o(0xDFF1fC, "W-", FMODE, "AGA: Write Fetch mode (0=OCS compatible)")	\
+  o(0xDFF1fE, "W-", CUSTOM_NOOP, "No operation/NULL (Copper NOP instruction)") 
 
 /* Use macro to create enums */
 enum {
@@ -567,4 +567,17 @@ enum {
   VSTART_MASK = 0xff,
 };
 
+/* video modes
+ * LORES 320x200x[n planes]
+ * HIRES 640x200x[n planes]
+ * EHB: 6 planes
+ *   0xxxxx = color index (32)
+ *   1xxxxx = half color index
+ * HAM: 6 planes
+ *   00xxxx = color index (16)
+ *   01bbbb = prev.RG_ + b
+ *   10rrrr = prev._GB + r
+ *   11gggg = prev.R_B + g
+ * HAM: 8 planes (AGA)
+ */
 #endif

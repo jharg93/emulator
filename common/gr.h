@@ -163,7 +163,7 @@ class Screen {
 
 void waitFrame();
 
-static inline color MKRGB(int r, int g, int b, int a = 0) {
+static constexpr color MKRGB(int r, int g, int b, int a = 0) {
   return ((a << 24) + (r << 16) + (g << 8) + b);
 }
 static inline int RGB_R(int p) { return ((p >> 10) & 0x1F) * 4; }
