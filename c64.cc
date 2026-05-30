@@ -96,6 +96,10 @@ enum {
   ECM = 0x40,
   BMM = 0x20,
   MCM = 0x10,
+
+  PRI_1 = 1, // under bg
+  PRI_2 = 2, // background
+  PRI_3 = 3, // over bg
 };
 
 /* Sprites 24x21
@@ -454,9 +458,13 @@ struct sprite_t {
 
   int XPOS()   const { return sx; };
   int YPOS()   const { return sy; };
-  int HEIGHT() const { return 21; };
-  int WIDTH()  const { return 24; };
+  int HEIGHT() const { return ey*21; };
+  int WIDTH()  const { return ex*24; };
   int PRI()    const { return pri; };
+  int visible(int y) {
+    int vy = y - sy;
+    return (vy >= 0 && vy < HEIGHT());
+  };
 };
 
 struct c64 : public bus_t {
@@ -1884,6 +1892,13 @@ bool sprite_t::load(c64 *c, int n, int y)
   ey  = (c->sprite_ey & sbit) ? 2 : 1;
   mc  = (c->sprite_mc & sbit) ? 2 : 1;
   pri = !!(c->sprite_pri & sbit);
+  if (pri) {
+    printf("sprite %d pri\n", n);
+  }
+  
+  /* Check if y line in sprite */
+  if (!visible(y))
+    return false;
 
   /* Get sprite bits position in RAM */
   sp = c->sprite_ptr[n] * 64 + c->vicbase;
@@ -1903,13 +1918,37 @@ bool sprite_t::load(c64 *c, int n, int y)
   return true;
 }
 
+auto spix = [](int *rline, int x, uint8_t bmp, int bpp, int *clr, int pri = 0) {
+  int c, rp, rc;
+  
+  if (x >= 0 && x < 320) {
+    c = (bmp >> (8 - bpp));
+    rp = (rline[x] >> 24);
+    rc = (rline[x] >> 16) & 0xF;
+    if (clr[c] != -1) {
+      if (rp != 0)
+	collide = true;
+      if (pri > rp || rc == 0)
+	rline[x] = (pri << 24) | (c << 16) | clr[c];
+    }
+  }
+ };
+
+//--------
+// 00 byte00,byte01,byte02
+// 01 byte03,byte04,byte05
+// 02 byte06,byte07,byte08
+// 04 byte09,byte10,byte11
+// 05 byte12,byte13,byte14
+// 06 byte15,byte16,byte17
+// 07 byte18,byte19,byte20
+// 08 byte21,byte22,byte23
 void c64::drawsprite(int n, int y) {
   sprite_t *s = &xspr[n];
-
+  
   if (!s->load(this, n, y))
     return;
-
-#if 1
+#if 0
   printf(" drawsprite%d: (%3d,%3d) 2X(%d,%d) pri:%d mc:%d y:%d sp:%.4x\n",
 	 n, s->sx, s->sy, s->ex, s->ey, s->pri, s->mc, y, s->sp);
   for (int i = 0; i < s->mc*2; i++) {
@@ -1917,10 +1956,24 @@ void c64::drawsprite(int n, int y) {
   }
   printf("\n");
 #endif
-
   collide = false;
+#if 1
+  int px = s->sx;
+  int np = s->mc * s->ex;
+  uint8_t *bp = &ram[s->sp + (y - s->sy) * 3];
+  for (int tx = 0; tx < 3; tx++) {
+    uint8_t bmp = bp[tx];
+    for (int i = 0; i < 8; i += s->mc) {
+      for (int k = 0; k < np; k++) {
+	spix(rline, px++, bmp, s->mc, s->clr, s->pri ? PRI_3 : PRI_1);
+      }
+      bmp <<= s->mc;
+    }
+  }
+#else
   pbits(&ram[s->sp], s->clr, 24, 21, s->sy - y, s->mc);
   drawbmp(EX+s->sx, EY+s->sy, 24, 21, &ram[s->sp], s->ex, s->ey, s->mc, s->clr, y + EY);
+#endif
   if (collide) {
     ioreg(SPRITE_SPR) |= (1L << n);
   }
@@ -1929,15 +1982,10 @@ void c64::drawsprite(int n, int y) {
 /* Draw row of 8 raster line */
 void c64::drawline(int y)
 {
-#if 1
   int clr[4], ch, smode;
-  int sx, sy, cb, sb, bpp, fy, cy;
+  int cb, sb, bpp, fy, cy;
   uint8_t bmp;
 
-  auto spix = [&](int x, int c, int pri = 0) {
-    rline[x] = clr[c];
-  };
-  
   smode = scrmode();
 
   cy = (y / 8);
@@ -1955,11 +2003,10 @@ void c64::drawline(int y)
   chrbase = vicbase + cb;
 
   /* Get XSCROLL/YSCROLL */
-  sx = XSCROLL();
-  sy = YSCROLL();
+  const int bg0 = bg_clr[0] & 0xF;
   for (int x = 0; x < 40; x++) {
     const int addr = (cy * 40) + x;
-    const int bg0 = bg_clr[0] & 0xF;
+    const int  cr = color_ram[addr] & 0xF;
     
     bpp = 1;
     ch = screen_ram[addr];
@@ -1968,7 +2015,7 @@ void c64::drawline(int y)
        * 2 colors from BG0.lo, Color RAM.lo 
        * bitmap = &char_rom[ch * 8 + (y % 8)] */
       clr[0] = bg0;
-      clr[1] = color_ram[addr] & 0xF;
+      clr[1] = cr;
     }
     else if (smode == mode_mcchar) {
       /* Multi-color Char mode
@@ -1976,16 +2023,16 @@ void c64::drawline(int y)
        * Values 8-15 = multicolor, values 0-7 = standard
        * bitmap = &char_rom[ch * 8 + (y % 8)]
        */
-      if ((color_ram[addr] & 0x8) == 0x8) {
+      if ((cr & 0x8) == 0x8) {
 	clr[0] = bg0;
 	clr[1] = bg_clr[1] & 0xF;
 	clr[2] = bg_clr[2] & 0xF;
-	clr[3] = color_ram[addr] & 0x7;
+	clr[3] = cr & 0x7;
 	bpp = 2;
       }
       else {
 	clr[0] = bg0;
-	clr[1] = color_ram[addr] & 0xF;
+	clr[1] = cr;
       }
     }
     else if (smode == mode_extbg) {
@@ -1996,7 +2043,7 @@ void c64::drawline(int y)
        * bitmap = &char_rom[(ch & 0x3F) * 8 + (y % 8)]
        */
       clr[0] = bg_clr[ch >> 6] & 0xF;
-      clr[1] = color_ram[addr] & 0xF;
+      clr[1] = cr;
       ch = ch & 0x3f;
     }
     else if (smode == mode_bitmap) {
@@ -2012,111 +2059,21 @@ void c64::drawline(int y)
       clr[0] = bg0;
       clr[1] = (ch >> 4) & 0xF;
       clr[2] = (ch >> 0) & 0xF;
-      clr[3] = color_ram[addr] & 0xF;
+      clr[3] = cr;
       ch = addr;
       bpp = 2;
     }
+
+    // get start pixel and bitmap
+    int px = x * 8;
     bmp = vicram((ch * 8) + fy);
     for (int i = 0; i < 8; i += bpp) {
-      int c;
-      
-      if (bpp == 1) {
-	c = (bmp >> 7) & 1;
-	spix(x * 8 + i + sx + 0, c);
-      }
-      else {
-	c = (bmp >> 6) & 3;
-	spix(x * 8 + i + sx + 0, c);
-	spix(x * 8 + i + sx + 1, c);
-      }
+      for (int k = 0; k < bpp; k++) {
+	spix(rline, px++, bmp, bpp, clr, PRI_2);
+      };
       bmp <<= bpp;
     }
-    ::drawline(screen, rline, 320, EX+sx, EY+y+sy, 0);
   }
-#else
-  int clr[4], ch, smode;
-  int sx, sy, cb, sb, bpp;
-  uint8_t bmp;
-  
-  smode = scrmode();
-  
-  /* Get Memory pointers, screen, chrbase */
-  sb = (memptr & 0xF0) << 6;
-  cb = (memptr & 0x0E) << 10;
-  if (smode == mode_bitmap || smode == mode_mcbitmap) {
-    cb = (memptr & 0x08) << 10;
-  }
-
-  screen_ram = &ram[vicbase + sb];
-  sprite_ptr = &screen_ram[0x3F8];
-  chrbase = vicbase + cb;
-
-  /* Get XSCROLL/YSCROLL */
-  sx = XSCROLL();
-  sy = YSCROLL();
-  for (int x = 0; x < 40; x++) {
-    const int addr = (y * 40) + x;
-
-    bpp = 1;
-    ch = screen_ram[addr];
-    if (smode == mode_char) {
-      /* Char mode
-       * 2 colors from BG0.lo, Color RAM.lo 
-       * bitmap = &char_rom[ch * 8 + (y % 8)] */
-      clr[0] = bg_clr[0] & 0xF;
-      clr[1] = color_ram[addr] & 0xF;
-    }
-    else if (smode == mode_mcchar) {
-      /* Multi-color Char mode
-       * 4 Colors from BG0.lo, BG1.lo, BG2.lo, Color RAM.lo 
-       * Values 8-15 = multicolor, values 0-7 = standard
-       * bitmap = &char_rom[ch * 8 + (y % 8)]
-       */
-      if ((color_ram[addr] & 0x8) == 0x8) {
-	clr[0] = bg_clr[0] & 0xF;
-	clr[1] = bg_clr[1] & 0xF;
-	clr[2] = bg_clr[2] & 0xF;
-	clr[3] = color_ram[addr] & 0x7;
-	bpp = 2;
-      }
-      else {
-	clr[0] = bg_clr[0] & 0xF;
-	clr[1] = color_ram[addr] & 0xF;
-      }
-    }
-    else if (smode == mode_extbg) {
-      /* Extended BG mode
-       * 2 colors, but background has 4 options
-       * upper bits of ch select which color, 
-       * bg0, bg1, bg2, bg3 but limits to only certain chars
-       * bitmap = &char_rom[(ch & 0x3F) * 8 + (y % 8)]
-       */
-      clr[0] = bg_clr[ch >> 6] & 0xF;
-      clr[1] = color_ram[addr] & 0xF;
-      ch = ch & 0x3f;
-    }
-    else if (smode == mode_bitmap) {
-      /* Bitmap mode
-       * 2 Colors from Screen RAM[hi,lo]: 2000-3FFF */
-      clr[0] = (ch >> 0) & 0xF;
-      clr[1] = (ch >> 4) & 0xF;
-      ch = addr;
-    }
-    else if (smode == mode_mcbitmap) {
-      /* Multi-color bitmap mode
-       * 4 Colors from BG0, Screen RAM[hi,lo], Color RAM */
-      clr[0] = bg_clr[0] & 0xF;
-      clr[1] = (ch >> 4) & 0xF;
-      clr[2] = (ch >> 0) & 0xF;
-      clr[3] = color_ram[addr] & 0xF;
-      ch = addr;
-      bpp = 2;
-    }
-    if (bpp >= 1) {
-      drawtile(x*8+sx, y*8+sy, ch, bpp, clr);
-    }
-  }
-#endif
 }
 
 void c64::drawframe()
@@ -2258,6 +2215,11 @@ void c64::ppu_tick()
     for (int i = 7; i >= 0; i--) {
       drawsprite(i, row);
     }
+    for (int i = 0; i < std::size(rline); i++) {
+      rline[i] &= 0xf;
+    }
+    ::drawline(screen, rline, 320, EX, EY+row, 0);
+    memset(rline, 0, sizeof(rline));
   }
   /* Increase scanline, get next cycles */
   dot -= nextline;
