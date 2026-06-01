@@ -86,7 +86,6 @@ enum {
   SPRITE_Y   = 0xD001, // 53249 yyyyyyyy  Sprite Y
 
   SPRITE_SPR = 0xD01E,
-  BG0_CLR    = 0xD021, 
   
   SPRITE_PTR = 2040,   // 2040-2047 or screen_ram+0x3f8
 
@@ -571,7 +570,6 @@ struct c64 : public bus_t {
   void ppu_tick();
   void drawline(int y);
   void drawsprite(int n, int y);
-  void drawtile(int tx, int ty, int id, int bpp, int *clr, int line = -1);
   
   void drawframe();
   int  scrmode();
@@ -589,10 +587,11 @@ struct c64 : public bus_t {
   int ROWS() const {
     return ctrl1 & 0x8 ? 25 : 24;
   };
-  
+  int DEN() {
+    return (CTRL1 & 0x10) != 0;
+  };
   bool is_badline(int n) {
-    int ys = 0;
-    return (n >= 0x30 && n <= 0xf7 && ((n & 7) == ys));
+    return DEN() && (n >= 48) && (n <= 247) && ((n & 7) == YSCROLL());
   };
   c64();
   uint8_t *charram(int offset);
@@ -752,7 +751,7 @@ int c64::vicio(uint32_t offset, const int mode, iodata_t& val) {
   case VIC_WRITE(0xD00d): xspr[6].state = 1; break;
   case VIC_WRITE(0xD00f): xspr[7].state = 1; break;
     break;
-  case VIC_READ(0xD011):
+  case VIC_READ(CTRL1):
     /* Read CTRL1 */
     val = (val & 0x7F) | ((scanline  & 0x100) >> 1);
     break;
@@ -765,13 +764,13 @@ int c64::vicio(uint32_t offset, const int mode, iodata_t& val) {
     raster_irq = (raster_irq & 0xFF00) | val;
     sli[raster_irq] = vic_irq.en & VIC_IRQ_RASTER;
     break;
-  case VIC_WRITE(0xD011):
+  case VIC_WRITE(CTRL1):
     /* Write CTRL1 */
     smode = scrmode();
-    fprintf(stdout, "set ctrl1: %.2x[%s] rst8:%x ecm:%x bmm:%x den:%x rsel:%x yscroll:%x\n",
-	    val, scrmodes[smode],
-	    !!(val & 0x80), !!(val & 0x40), !!(val & 0x20), !!(val & 0x10),
-	    !!(val & 0x08), (val & 0x07));
+    printf("set ctrl1: %.2x[%s] rst8:%x ecm:%x bmm:%x den:%x rsel:%x yscroll:%x\n",
+	   val, scrmodes[smode],
+	   !!(val & 0x80), !!(val & 0x40), !!(val & 0x20), !!(val & 0x10),
+	   !!(val & 0x08), (val & 0x07));
     raster_irq = (raster_irq & 0x00FF) | ((val & 0x80) << 1);
     sli[raster_irq] = vic_irq.en & VIC_IRQ_RASTER;
     rows = (val & 0x08) ? 25 : 24;
@@ -1578,51 +1577,6 @@ uint8_t c64::vicram(int offset)
   return ram[offset];
 }
 
-/* Tiles: 8x8
- * Sprites: 24x21
- *
- * tx, ty: screen coords
- * w, h  : width/height
- * sx, sy: scale
- * bpp   : bits per pixel
- * clr   : colors
- * bits  : bitmap data
- */
-void drawbmp(int tx, int ty, int w, int h, uint8_t *bits, int sx, int sy, int bpp, const int *clr, int line = -1)
-{
-  bmp tbmp(w, h, bpp, bits);
-
-  if (line != -1) {
-    printf("Drawbmp: %d, %d\n", ty, line);
-  }
-  for (int y=0; y<h*sy; y++) {
-    if (ty + y < EY || ty+y >= EY+200)
-      continue;
-    int n = (ty + y - line);
-    if (line != -1 && (n < 0 || n > 7))
-      continue;
-    for (int x=0; x<w*sx; x++) {
-      if (tx + x < EX || tx+x >= EX+320)
-	continue;
-      int nc = tbmp.getpixel(x/sx, y/sy);
-      if (clr[nc] != -1) {
-	int oc = screen->pixel(tx + x, ty + y);
-	if (oc) {
-	  collide = true;
-	}
-	screen->setpixel(tx+x, ty+y, clr[nc]);
-      }
-    }
-  }
-}
-
-void c64::drawtile(int tx, int ty, int id, int bpp, int *clr, int line)
-{
-  uint8_t *bits = charram(id * 8);
-  
-  drawbmp(EX+tx, EY+ty, 8, 8, bits, 1, 1, bpp, clr, line);
-}
-
 /* Convert to BCD for RTC */
 int bcd(int n)
 {
@@ -1883,7 +1837,7 @@ bool sprite_t::load(c64 *c, int n, int y)
   
   /* Sprite upper left coords = (24,50) */
   sx = ioreg(SPRITE_X + (n * 2)) - 24;
-  sy = ioreg(SPRITE_Y + (n * 2)) - 50 - 1;
+  sy = ioreg(SPRITE_Y + (n * 2)) - 50;
   if (c->sprite_x8 & sbit)
     sx += 256;
 
@@ -1923,15 +1877,15 @@ bool sprite_t::load(c64 *c, int n, int y)
 // draws background with pri == 2
 // draws sprite with pri == 1 or 3
 // if color# == 0 and pri == 1, then override
-auto spix = [](int *rline, int x, uint8_t bmp, int bpp, int *clr, int pri = 0) {
-  int c, rp, rc;
+auto spix = [](int *rline, int x, uint8_t bmp, int bpp, int w, int *clr, int pri = 0) {
+  int c, rpri, rclr;
   
   if (x >= 0 && x < 320) {
     c = (bmp >> (8 - bpp));
-    rp = (rline[x] >> 24);
-    rc = (rline[x] >> 16) & 0xF;
+    rpri = (rline[x] >> 24);
+    rclr = (rline[x] >> 16) & 0xF;
     if (clr[c] != -1) {
-      if (rp != 0)
+      if (rpri && rclr != 0)
 	collide = true;
       rline[x] = (pri << 24) | (c << 16) | clr[c];
     }
@@ -1949,35 +1903,22 @@ auto spix = [](int *rline, int x, uint8_t bmp, int bpp, int *clr, int pri = 0) {
 // 08 byte21,byte22,byte23
 void c64::drawsprite(int n, int y) {
   sprite_t *s = &xspr[n];
-  
+
   if (!s->load(this, n, y))
     return;
-#if 0
-  printf(" drawsprite%d: (%3d,%3d) 2X(%d,%d) pri:%d mc:%d y:%d sp:%.4x\n",
-	 n, s->sx, s->sy, s->ex, s->ey, s->pri, s->mc, y, s->sp);
-  for (int i = 0; i < s->mc*2; i++) {
-    printf(" clr:%d ", s->clr[i]);
-  }
-  printf("\n");
-#endif
   collide = false;
-#if 1
   int px = s->sx;
   int np = s->mc * s->ex;
-  uint8_t *bp = &ram[s->sp + (y - s->sy) * 3];
-  pbits(&ram[s->sp], s->clr, 24, s->ey*21, y - s->sy, s->mc);
+  uint8_t *bp = &ram[s->sp + ((y - s->sy) / s->ey) * 3];
   for (int tx = 0; tx < 3; tx++) {
     uint8_t bmp = bp[tx];
     for (int i = 0; i < 8; i += s->mc) {
       for (int k = 0; k < np; k++) {
-	spix(rline, px++, bmp, s->mc, s->clr, s->pri ? PRI_3 : PRI_1);
+	spix(rline, px++, bmp, s->mc, np, s->clr, s->pri ? PRI_3 : PRI_1);
       }
       bmp <<= s->mc;
     }
   }
-#else
-  drawbmp(EX+s->sx, EY+s->sy, 24, 21, &ram[s->sp], s->ex, s->ey, s->mc, s->clr, y + EY);
-#endif
   if (collide) {
     ioreg(SPRITE_SPR) |= (1L << n);
   }
@@ -1987,12 +1928,12 @@ void c64::drawsprite(int n, int y) {
 void c64::drawline(int y)
 {
   int clr[4], ch, smode;
-  int cb, sb, bpp, fy, cy;
+  int cb, sb, bpp, fy, ty;
   uint8_t bmp;
 
   smode = scrmode();
 
-  cy = (y / 8);
+  ty = (y / 8);
   fy = (y % 8);
   
   /* Get Memory pointers, screen, chrbase */
@@ -2006,10 +1947,9 @@ void c64::drawline(int y)
   sprite_ptr = &screen_ram[0x3F8];
   chrbase = vicbase + cb;
 
-  /* Get XSCROLL/YSCROLL */
-  const int bg0 = bg_clr[0] & 0xF;
-  for (int x = 0; x < 40; x++) {
-    const int addr = (cy * 40) + x;
+  for (int sx = 0; sx < 320; sx += 8) {
+    const int tx = (sx / 8);
+    const int addr = (ty * 40) + tx;
     const int  cr = color_ram[addr] & 0xF;
     
     bpp = 1;
@@ -2018,7 +1958,7 @@ void c64::drawline(int y)
       /* Char mode
        * 2 colors from BG0.lo, Color RAM.lo 
        * bitmap = &char_rom[ch * 8 + (y % 8)] */
-      clr[0] = bg0;
+      clr[0] = bg_clr[0] & 0xF;
       clr[1] = cr;
     }
     else if (smode == mode_mcchar) {
@@ -2028,23 +1968,21 @@ void c64::drawline(int y)
        * bitmap = &char_rom[ch * 8 + (y % 8)]
        */
       if ((cr & 0x8) == 0x8) {
-	clr[0] = bg0;
+	clr[0] = bg_clr[0] & 0xF;
 	clr[1] = bg_clr[1] & 0xF;
 	clr[2] = bg_clr[2] & 0xF;
 	clr[3] = cr & 0x7;
 	bpp = 2;
       }
       else {
-	clr[0] = bg0;
+	clr[0] = bg_clr[0] & 0xF;
 	clr[1] = cr;
       }
     }
     else if (smode == mode_extbg) {
       /* Extended BG mode
-       * 2 colors, but background has 4 options
-       * upper bits of ch select which color, 
-       * bg0, bg1, bg2, bg3 but limits to only certain chars
-       * bitmap = &char_rom[(ch & 0x3F) * 8 + (y % 8)]
+       * 2 colors, but background has 4 options, chars are 0..3f only
+       * upper bits of ch select bg color from bg0/1/2/3
        */
       clr[0] = bg_clr[ch >> 6] & 0xF;
       clr[1] = cr;
@@ -2060,7 +1998,7 @@ void c64::drawline(int y)
     else if (smode == mode_mcbitmap) {
       /* Multi-color bitmap mode
        * 4 Colors from BG0, Screen RAM[hi,lo], Color RAM */
-      clr[0] = bg0;
+      clr[0] = bg_clr[0] & 0xF;
       clr[1] = (ch >> 4) & 0xF;
       clr[2] = (ch >> 0) & 0xF;
       clr[3] = cr;
@@ -2069,11 +2007,11 @@ void c64::drawline(int y)
     }
 
     // get start pixel and bitmap
-    int px = x * 8;
+    int px = sx + XSCROLL();
     bmp = vicram((ch * 8) + fy);
     for (int i = 0; i < 8; i += bpp) {
       for (int k = 0; k < bpp; k++) {
-	spix(rline, px++, bmp, bpp, clr, PRI_2);
+	spix(rline, px++, bmp, bpp, bpp, clr, PRI_2);
       };
       bmp <<= bpp;
     }
@@ -2142,10 +2080,6 @@ volatile uint16_t& ioreg16(int n) {
   return *(uint16_t *)&thegame.ioregs[n & 0xFFF];
 }
 
-uint8_t cpu_read8(uint32_t offset, int type)
-{
-  iodata_t v;
-
   /* 0000 - 7FFF: RAM
    * 8000 - 9FFF: RAM CARTLO
    * A000 - BFFF: RAM CARTHI BASIC
@@ -2153,6 +2087,10 @@ uint8_t cpu_read8(uint32_t offset, int type)
    * D000 - DFFF: RAM CHAR   IO
    * E000 - FFFF: RAM CARTHI KERNAL
    */
+uint8_t cpu_read8(uint32_t offset, int type)
+{
+  iodata_t v;
+
   thegame.read(offset, v);
   if (offset >= 0xFFF0) {
     printf("nmi read: %.4x = %.2x\n", offset, v);
@@ -2162,10 +2100,6 @@ uint8_t cpu_read8(uint32_t offset, int type)
 
 void  cpu_write8(uint32_t offset, uint8_t v, int type)
 {
-  if (v == 0x55) {
-    printf("%.4x = 0x55\n", offset);
-  }
-  //printf("write:%.8x = %.2x\n", offset, v);
   thegame.write(offset, v);
 }
 
@@ -2191,6 +2125,9 @@ void  cpu_write8(uint32_t offset, uint8_t v, int type)
  * CIA1 timer
  * PAL  = 16421 cycles * 60 / 985248
  * NTSC = 17045 cycles * 60 / 1022730
+ *
+ * PAL = 33 (51)/FA (250) RSEL=1,CSEL=1
+ * CSEL/RSEL shrink to 304x192
  */
 
 #define CYCLES_PER_LINE    63
@@ -2206,6 +2143,9 @@ void c64::ppu_tick()
   if (++dot < nextline) {
     return;
   }
+  if (is_badline(row)) {
+    screen->scrline(0, row, EX, COLS() == 40 ? 3 : 4);
+  }
   /* Row is Displayed video line */
   if (row >= 0 && row < 200) {
     smode = scrmode();
@@ -2218,12 +2158,12 @@ void c64::ppu_tick()
     /* Draw line and sprite */
     drawline(row);
     for (int i = 7; i >= 0; i--) {
-      drawsprite(i, row);
+      drawsprite(i, row + YSCROLL());
     }
     for (int i = 0; i < std::size(rline); i++) {
       rline[i] &= 0xf;
     }
-    ::drawline(screen, rline, 320, EX, EY+row, 0);
+    ::drawline(screen, rline, 320, EX, scanline + YSCROLL(), 0);
     memset(rline, 0, sizeof(rline));
   }
   /* Increase scanline, get next cycles */
