@@ -35,8 +35,12 @@ struct serial {
   uint8_t data;
 };
 
-/* Convert plane bits to color */
-auto pclr = [](uint16_t *p, uint16_t mask, int mode = 0) {
+/* Convert plane bits to color:
+ *  mode == 0: BPL1DAT,BPL2DAT,BPL3DAT,BPL4DAT,BPL5DAT,BPL6DAT
+ *  mode == 2: SPRxDATA, SPRxDATB
+ *  mode ==99: SPRxDATA, SPRxDATB, SPRyDATA, SPRyDATB
+ */
+auto pclr = [](uint16_t *p, uint16_t& mask, int mode = 0) {
   int clr = 0;
   // 2 planes, 4 colors
   if (p[0] & mask) clr |= 0x01;
@@ -51,10 +55,13 @@ auto pclr = [](uint16_t *p, uint16_t mask, int mode = 0) {
     if (p[4] & mask) clr |= 0x04;
     if (p[5] & mask) clr |= 0x08;
   }
+  mask = ror16(mask, 1);
   return clr;
  };
 
 /* de-amiga-os-120
+https://eab.abime.net/showthread.php?t=110101
+
 https://pastraiser.com/
 https://wandel.ca/homepage/execdis/
 
@@ -174,6 +181,25 @@ found sig: off:00ff425a 00ff425a end:00ff4290  0 21  9  0 00ff43c4 00ff4274 extr
 struct rect {
   int x0, y0, x1, y1;
 };
+
+struct YiqColor {
+  float y, i, q;
+  YiqColor(uint32_t rgb) {
+    int r = (rgb >> 16) & 0xff;
+    int g = (rgb >> 8) & 0xff;
+    int b = (rgb & 0xff);
+    y = 0.299 * r + 0.587 * g + 0.114 * b;
+    i = 0.596 * r - 0.274 * g - 0.322 * b;
+    q = 0.211 * r - 0.523 * g + 0.312 * b;
+  };
+  operator uint32_t() const {
+    int r = 255 * (y + 0.956 * i + 0.621 * q);
+    int g = 255 * (y - 0.272 * i - 0.647 * q);
+    int b = 255 * (y - 1.106 * i + 1.703 * q);
+  };
+};
+
+
 
 // cia.a = 0x8008 1000.0000.0000.1000
 // cia.b = 0xa000 1100.0000.0000.0000
@@ -361,9 +387,9 @@ constexpr bool attached(int n) {
 	  (sprites[n].ctl == sprites[n+1].ctl));
 }
 
-/* CIA8250 chip
+/* CIA8250 chips
  *   BFEx01 = CIA A
- *     0.pra   = |FIR1|FIR0|RDY |TK0 |WPRO|CHNG|LED |OVL 
+ *     0.pra   = |FIR1|FIR0|RDY |TK0 |WPRO|CHNG|LED |OVL          11xxxxxx
  *     1.prb   = parallel port
  *     2.ddra  = direction for port A (0 = input, 1 = output)
  *     3.ddrb  = direction for port B (0 = input, 1 = output)
@@ -469,6 +495,7 @@ struct cia8250 : public cia_t {  // CIAA   CIAB
 
     id = _id;
     prb = 0xff;
+    pra = _pra;
   };
   void show(const char *);
   void Setreg(int n, uint8_t v);
@@ -501,7 +528,8 @@ void showdisk() {
 	   disks[i].index,
 	   disks[i].cylinder,
 	   disks[i].side,
-	   disks[i].pra, disks[i].prb);
+	   disks[i].pra,
+	   disks[i].prb);
   }
 }
 
@@ -511,8 +539,8 @@ static void floppyInit(int drive) {
   d->index = 0;
   d->cylinder = 0;
   d->side = 0;
-  disks[disk_sel].pra &= 0b1111'1011;
-  disks[disk_sel].pra &= 0b1110'1111;
+  disks[disk_sel].pra &= 0b1111'1011; // ~CHNG
+  disks[disk_sel].pra &= 0b1110'1111; // ~TK0
 }
 
 static void encodeBlock(uint8_t *src, uint8_t *dst, int size) {
@@ -695,7 +723,7 @@ static void floppyLoad(int drive, const char *name) {
 }
 
 static void floppyState() {
-  cia_a.pra &= 0b1100'0011;
+  cia_a.pra &= 0b1100'0011;  // ~(RDY|TK0|WPRO|CHNG)
   cia_a.pra |= disks[disk_sel].pra;
 };
 
@@ -705,11 +733,11 @@ static void floppyInsert(int dd) {
   printf("disk insert %d\n", dd);
   // chng
   if ((d->pra & 0x4) == 0x4) {
-    d->pra &= 0b1111'1011;
+    d->pra &= 0b1111'1011; // ~CHNG
     printf("disk ejected %d\n", dd);
   }
   else {
-    d->pra |= 0b0000'0100;
+    d->pra |= 0b0000'0100; // CHNG
     printf("disk inserted %d\n", dd);
   }
 }
@@ -736,7 +764,7 @@ static void floppySetState() {
   prb = cia_b.prb;
   switch (prb & PRB_SEL) {
   case 0x78:
-    cia_a.pra &= 0b1100'0011;
+    cia_a.pra &= 0b1100'0011; // ~(RDY|TK0|WPRO|CHNG)
     return;
   case 0x70:
     disk_sel = 0;
@@ -756,7 +784,7 @@ static void floppySetState() {
   disk *d = &disks[disk_sel];
   if (d->idMode > 0) {
     // id counter [rdy]
-    d->pra &= 0b1101'1111;
+    d->pra &= 0b1101'1111;   // ~RDY
     d->idMode--;
     cia_a.pra |= (d->pra & 0b0011'1100);
     printf("id counter... %d\n", d->idMode);
@@ -775,12 +803,12 @@ static void floppySetState() {
       printf("disk %d set idmode\n", disk_sel);
       d->idMode = 32;
     }
-    d->pra |= 0b0010'0000;
+    d->pra |= 0b0010'0000; // RDY
   } else {
     // motor on
     printf("disk %d Motor on\n", disk_sel);
     if (d->pra & 0b0000'0100) {
-      d->pra &= 0b1101'1111;
+      d->pra &= 0b1101'1111; // ~RDY
       printf("disk %d ready...\n", disk_sel);
     }
   }
@@ -791,10 +819,10 @@ static void floppySetState() {
   }
   if (d->cylinder == 0) {
     printf("disk %d at track 0\n", disk_sel);
-    d->pra &= 0b1110'1111;
+    d->pra &= 0b1110'1111; // ~TK0
   } else {
     printf("disk %d not track 0\n", disk_sel);
-    d->pra |= 0b0001'0000;
+    d->pra |= 0b0001'0000; // TK0
   }
   d->side = (prb & 0b000'0100) ? 0 : 1;
   printf("disk %d side: %x\n", disk_sel, d->side);
@@ -937,6 +965,7 @@ void checkpc()
   if (fnmap.count(PC)) {
     //printf("symbol: %s\n", fnmap[PC].c_str());
   }
+#if 0
   if (PC == 0xfe8d1a || PC == 0xfe8d40 || PC == 0xfed72) {
     printf("%.8x grSetAPen: %x\n", PC, D[0]);
   }
@@ -955,6 +984,7 @@ void checkpc()
   if (PC == 0xFE8D76) {
     printf("%.8x bitmap\n", PC);
   }
+#endif
   switch(PC) {
   case 0xFC118e:
     printf("@SetIntVec: %x[%s] %x\n", D[0], (D[0] < 16) ? bits_irqname[D[0]] : "xxx", A[1]);
@@ -1100,31 +1130,7 @@ struct blitter_t {
   void      blt_setsize(uint16_t sz);
   uint16_t  blt_read(char ch, ioreg32&ptr, int delta);
   void      blt_write(char ch, ioreg32& ptr, uint16_t v, int delta);
-  void      blt_mod(ioreg32& ptr, int16_t delta, int dec, const char *lbl);
-
-  // Misc
-  IOREG16(joy0dat, JOY0DAT);
-  IOREG16(joy1dat, JOY1DAT);
-  IOREG16(potimp, POTGOR);
-  IOREG16(clxdat, CLXDAT);
-
-  // DISK
-  // CIAA.PRA
-  //   +----+----+----+----+----+----+----+----+
-  //   |    |    |RDY |TK0 |PROT|CHG |    |    |
-  //   +----+----+----+----+----+----+----+----+
-  // CIAA.PRB
-  //   +----+----+----+----+----+----+----+----+
-  //   |MTR |SEL3|SEL2|SEL1|SEL0|SIDE|DIR |STEP|
-  //   +----+----+----+----+----+----+----+----+
-  //
-  // ADKCON/ADKCONR
-  IOREG32(dskptr,  DSKPTH);
-  IOREG16(dskdat,  DSKDAT);
-  IOREG16(dsklen,  DSKLEN);
-  IOREG16(dskbytr, DSKBYTR);
-  IOREG16(dsksync, DSKSYNC);
-  IOREG16(adkconr, ADKCONR);
+  void      blt_mod(ioreg32 ptr, int16_t delta, int dec, const char *lbl);
 
   void showblt();
 
@@ -1160,6 +1166,8 @@ struct amiga : public bus_t, crtc_t, blitter_t {
 
   //========================= COLOR
   uint32_t cpal[256];
+
+  // amiga color is 0rgb
   uint32_t ARGB(const int clr) {
     int r = (clr >> 4) & 0xF0;
     int g = (clr >> 0) & 0xF0;
@@ -1177,6 +1185,7 @@ struct amiga : public bus_t, crtc_t, blitter_t {
       clr[i] = cpal[start + i];
     }
   };
+  uint32_t ham6(int clr);
 
   // collision test:
   // spr0 = 0x0001
@@ -1196,12 +1205,12 @@ struct amiga : public bus_t, crtc_t, blitter_t {
   // bp6  = 0x3000
   // bp7  = 0x4000
   enum {
-    CXPF2  = 0x500, // 0b0101'0000'0000
-    CXPF1  = 0xa00, // 0b1010'0000'0000
     CXSPR0 = 0x003, // 0b0000'0000'0011
     CXSPR2 = 0x00c, // 0b0000'0000'1100
     CXSPR4 = 0x030, // 0b0000'0011'0000
     CXSPR6 = 0x0c0, // 0b0000'1100'0000
+    CXPF2  = 0x500, // 0b0101'0000'0000
+    CXPF1  = 0xa00, // 0b1010'0000'0000
 
     // spr0.spr2 : (c & CXSPR0) && (c & CXSPR2)
   };
@@ -1251,7 +1260,8 @@ struct amiga : public bus_t, crtc_t, blitter_t {
     return (bplcon0 & D15) != 0;
   };
   uint32_t bpl_prev[8];
-
+  palclr   ham;
+  
   int pf1shift() const {
     return (bplcon1 >> 0) & 0xF;
   };
@@ -1270,7 +1280,7 @@ struct amiga : public bus_t, crtc_t, blitter_t {
   // return number of planes
   int bpu;
 
-  void renderbg(int y, int count, int dmapos);
+  void renderbg(int y);
   bool vid_tick();
 
   /* DMA Handlers */
@@ -1363,6 +1373,25 @@ struct amiga : public bus_t, crtc_t, blitter_t {
   bool dma_enabled(int) const;
 
   /* disk info */
+  // Misc
+  IOREG16(joy0dat, JOY0DAT);
+  IOREG16(joy1dat, JOY1DAT);
+  IOREG16(potgor, POTGOR);
+  IOREG16(clxdat, CLXDAT);
+
+  // DISK
+  //   +----+----+----+----+----+----+----+----+
+  //   |    |    |RDY |TK0 |PROT|CHG |    |    | CIAA.PRA
+  //   +----+----+----+----+----+----+----+----+
+  //   |MTR |SEL3|SEL2|SEL1|SEL0|SIDE|DIR |STEP| CIAA.PRB
+  //   +----+----+----+----+----+----+----+----+
+  // ADKCON/ADKCONR
+  IOREG32(dskptr,  DSKPTH);
+  IOREG16(dskdat,  DSKDAT);
+  IOREG16(dsklen,  DSKLEN);
+  IOREG16(dskbytr, DSKBYTR);
+  IOREG16(dsksync, DSKSYNC);
+  IOREG16(adkconr, ADKCONR);
   int disk = -1;
   int rdy = -1;
 
@@ -1384,6 +1413,35 @@ struct amiga : public bus_t, crtc_t, blitter_t {
 };
 
 amiga thegame;
+
+uint32_t amiga::ham6(int clr) {
+  int mode = 0;
+
+  if (bplcon0 & D11) {
+    // ham mode
+    mode = (clr >> 4) & 0xF;
+    clr &= 0xF;
+  };
+  switch (mode) {
+  case 0x0:
+    // default palette
+    ham = cpal[clr];
+    break;
+  case 0x1:
+    // modify blue
+    ham.b = clr << 4;
+    break;
+  case 0x2:
+    // modify red
+    ham.r = clr << 4;
+    break;
+  case 0x3:
+    // modify green
+    ham.g = clr << 4;
+    break;
+  }
+  return MKRGB(ham.r, ham.g, ham.b);
+}
 
 /* Request IRQ */
 void amiga::xx_request_irq(uint16_t bits, const char *who)
@@ -1571,7 +1629,7 @@ void amiga::showspr() {
 };
 
 // advance pointer by mod
-void blitter_t::blt_mod(ioreg32& ptr, int16_t delta, int dec, const char *lbl)
+void blitter_t::blt_mod(ioreg32 ptr, int16_t delta, int dec, const char *lbl)
 {
   if (dec < 0) {
     delta = -delta;
@@ -1585,7 +1643,6 @@ void blitter_t::blt_mod(ioreg32& ptr, int16_t delta, int dec, const char *lbl)
 /* blitter write memmory and advance pointer */
 void blitter_t::blt_write(char ch, ioreg32& addr, uint16_t v, int delta)
 {
-  //printf("blt%c_write: %.8x = %.4x [%.8x]\n", ch, (int)addr, v, delta);
   put16be(&mem[addr & ~1], v);
   addr = addr + delta;
 }
@@ -1594,7 +1651,6 @@ void blitter_t::blt_write(char ch, ioreg32& addr, uint16_t v, int delta)
 uint16_t blitter_t::blt_read(char ch, ioreg32& addr, int delta)
 {
   uint16_t v = get16be(&mem[addr & ~1]);
-  //printf("blt%c_read:  %.8x = %.4x [%.8x]\n", ch, (int)addr, v, delta);
   addr = addr + delta;
   return v;
 }
@@ -1647,22 +1703,14 @@ constexpr fbt fb(uint8_t fn, fbt a, fbt b, fbt c)
 {
   uint32_t d = 0;
 
-  if (fn & 0x80)
-    d |= a & b & c;
-  if (fn & 0x40)
-    d |= a & b & ~c;
-  if (fn & 0x20)
-    d |= a & ~b & c;
-  if (fn & 0x10)
-    d |= a & ~b & ~c;
-  if (fn & 0x08)
-    d |= ~a & b & c;
-  if (fn & 0x04)
-    d |= ~a & b & ~c;
-  if (fn & 0x02)
-    d |= ~a & ~b & c;
-  if (fn & 0x01)
-    d |= ~a & ~b & ~c;
+  if (fn & 0x80)  d |= a & b & c;
+  if (fn & 0x40)  d |= a & b & ~c;
+  if (fn & 0x20)  d |= a & ~b & c;
+  if (fn & 0x10)  d |= a & ~b & ~c;
+  if (fn & 0x08)  d |= ~a & b & c;
+  if (fn & 0x04)  d |= ~a & b & ~c;
+  if (fn & 0x02)  d |= ~a & ~b & c;
+  if (fn & 0x01)  d |= ~a & ~b & ~c;
   return d;
 }
 
@@ -1842,13 +1890,16 @@ void blitter_t::blt_line()
   blt_count -= 2;
 }
 
+// shift blit registers
 auto blt_shift = [](uint16_t &prev, uint16_t curr, int shift, bool desc) {
   const uint32_t p = prev;
 
   prev = curr;
   if (desc) {
+    // descending mode
     return ((curr << 16) | p) >> (16 - shift);
   }
+  // ascending mode
   return ((p << 16) | curr) >> shift;
  };
 
@@ -1876,7 +1927,7 @@ bool blitter_t::blt_tick()
     blt_line();
     return false;
   }
-  bool desc = (bltcon1 & DESC) != 0;
+  auto desc = (bltcon1 & DESC) != 0;
   auto ashift = (bltcon0 >> 12) & 0xF;
   auto bshift = (bltcon1 >> 12) & 0xF;
   auto delta = (desc ? -2 : 2);
@@ -1892,6 +1943,7 @@ bool blitter_t::blt_tick()
   uint16_t a = bltadat;
   uint16_t b = bltbdat;
   uint16_t c = bltcdat;
+
   if (lcnt == 0)
     a &= bltafwm;
   if (lcnt == (blt_width-1))
@@ -1920,8 +1972,8 @@ bool blitter_t::blt_tick()
     // signal blitter done
     //xx_request_irq(IRQ_BLIT, "BLItter");
     printf("--blt done\n");
-    sys->dmaconr = sys->dmaconr & 0xBFFF;
-    sys->chip_write(INTREQ, 0x8040, 2);
+    xsetclr(sys->dmaconr, DMA_BBUSY, "blitter.done");
+    sys->chip_write(INTREQ, IRQ_SET | IRQ_BLIT, 2);
   }
   return true;
 }
@@ -1981,20 +2033,20 @@ enum DmaCycle {
   Spr6b=0x2d,
   Spr7b=0x2f,
 
-  // hires vs lores
-  // hires: 4[e],3[o],2[e],1[o]
-  // lores: _[e],4[o],6[e],2[o],_[e],3[o],5[e],1[o]
-  bpl1h = 0x100 + Odd,
-  bpl2h = 0x110 + Even,
-  bpl3h = 0x120 + Odd,
-  bpl4h = 0x130 + Even,
-
+  // bitplane order
+  // hires: 4,3,2,1,4,3,2,1
+  // lores: _,4,6,2,_,3,5,1
   bpl1 = 0x100 + Odd,
   bpl2 = 0x110 + Odd,
   bpl3 = 0x120 + Odd,
   bpl4 = 0x130 + Odd,
   bpl5 = 0x140 + Even,
   bpl6 = 0x140 + Even,
+
+  bpl1h = 0x100 + Odd,
+  bpl2h = 0x110 + Even,
+  bpl3h = 0x120 + Odd,
+  bpl4h = 0x130 + Even,
 
   // copper is even cycle
   // blitter is odd cycle
@@ -2014,43 +2066,6 @@ static int lodma[] = {
   Even, Spr7a,Even, Spr7b,Even, Odd,  Even, Odd,
   // 38 : 2 words
   Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // 40 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // 58 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // 68 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // 78 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // 88 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // 98 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // a8 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // b8 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // c8 : 2 words
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // d8
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // e8
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  // f8
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
-  Even, bpl4, bpl6, bpl2, Even, bpl3, bpl5, bpl1,
 };
 
 static int hidma[] = {
@@ -2066,44 +2081,7 @@ static int hidma[] = {
   // 30
   Even, Spr7a,Even, Spr7b,Even, Odd,  Even, Odd,
   // 38 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // 40 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // 58 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // 68 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // 78 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // 88 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // 98 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // a8 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // b8 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // c8 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // d8 : 4 words
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // e8
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  // f8
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
-  bpl4h,bpl2, bpl3, bpl1h,bpl4h,bpl2, bpl3, bpl1h,
+  bpl4h,bpl2h,bpl3h,bpl1h,bpl4h,bpl2h,bpl3h,bpl1h,
 };
 
 // check if our mask of dma is enabled
@@ -2118,8 +2096,8 @@ int amiga::sprdma(int m) {
   int y, n;
 
   // sprite runs odd cycles
-  // SPRDATA m is: 20,22,24,26,28,2a,2c,2e
-  // SPRDATB m is: 21,23,25,27,29,2b,2d,2f
+  // SPRDATA m is: 20,22,24,26,28,2A,2C,2E
+  // SPRDATB m is: 21,23,25,27,29,2B,2D,2F
   if (m & 1)
     return Odd;
   y = vPos;
@@ -2187,20 +2165,13 @@ int amiga::auddma(int m) {
 // copper next
 // blitter, 68000
 void amiga::dodma(int dc) {
-  int m = hires()? hidma[dc] : lodma[dc];
-
+  // if >= ddfstart then it is bitplane fetch
   if (dc >= ddfstrt) {
-    dc = 0x38 + (dc & 7);
-    m = hires() ? hidma[dc] : lodma[dc];
+    int off = dc - ddfstrt;
+    dc = 0x38 + (off & 7);
   }
-  if (vPos >= screen.y0 && vPos < screen.y1) {
-    if (hPos == ddfstrt) {
-      printf("dma start %3d %.2x\n", vPos, hPos);
-    }
-    if (hPos == ddfstop) {
-      printf("dma stop  %3d %.2x\n", vPos, hPos);
-    }
-  }
+  int m = hires() ? hidma[dc] : lodma[dc];
+
   /* Run different dma cycles */
   if (m >= bpl1h) {
     m = bpdma(m);
@@ -2214,7 +2185,6 @@ void amiga::dodma(int dc) {
   else if (m == Disk) {
     m = diskdma();
   }
-  // m could have changed here... either Even or odd
 }
 
 int turbo = 8;
@@ -2259,63 +2229,71 @@ int amiga::rxdma(ioreg16 dat, ioreg32 ptr, int dmamask, const char *lbl) {
     return -1;
   }
   if (ptr != 0) {
-    // read data, advance pointer
+    // read dat reg, advance pointer
     dat = blt_read('p', ptr, 2);
   }
   return 0;
 }
 
 // Render playfields
-void amiga::renderbg(int y, int count, int dmapos)
+void amiga::renderbg(int y)
 {
   uint16_t *pd = (uint16_t *)&mem[BPL1DAT];
   uint16_t mask = 0x0080;
-  int line[640] = { 0 };
-  int bx;
 
-  /* Find x pos since data start */
-  bx = dmapos * 16;
-
-  // build line
-  assert(count*16 < 640);
-  for (int x = 0; x < count*16; x++) {
-    line[x] = pclr(pd, mask);
-    mask = ror16(mask, 1);
-  }
-
-  // get colors and collision
-  for (int x = 0; x < count*16; x++) {
+  auto spix = [&](int c) {
     if (bgx >= 0 && bgx < 640) {
-      collide[bgx] = (line[x] << 8);
-      bgline[bgx] = cpal[line[x]];
-      bgx++;
-      if (!hires()) {
-	collide[bgx] = (line[x] << 8);
-	bgline[bgx] = cpal[line[x]];
-	bgx++;
-      }
+      bgline[bgx] = ham6(c);
+      collide[bgx] = (c << 8);
     }
+    bgx++;
+  };
+
+  // build line from planes
+  for (int x = 0; x < 16; x++) {
+    int clr = pclr(pd, mask, 0x0);
+    spix(clr);
+    if (!hires())
+      spix(clr);
   }
 }
 
+#define bltrox
 int amiga::bpdma(int mode) {
+  int nm = (hPos & 1) ? Odd : Even;
+
+  // outside visible range
   if (vPos < screen.y0 || vPos >= screen.y1) {
-    return mode;
+    return nm;
   }
   if (totdma >= wdma)
-    return mode;
+    return nm;
+
+  // get bitplane number
   int bp = ((mode >> 4) & 0xF);
-  if (bp < bpu) {
-    rxdma(BPLxDAT(bp), BPLxPTR(bp), DMA_BPEN, "bpl");
+  if (bp >= bpu) {
+    BPLxDAT(bp) = 0;
+    return nm;
   }
-  // if we're within screen boundary
+#ifdef bltro
+  // rundma... if hackbltro, only run if frame==3
+  if (frame != 3) {
+    return nm;
+  }
+#endif
+
+  // dma this bitplane
+  rxdma(BPLxDAT(bp), BPLxPTR(bp), DMA_BPEN, "bpl");
+
+  // ddfstrt  ddfstop
+  //      38       d0  normal
+  //      40       c8  narrow
+  //      30       d8  wide/max
+  //      28       d8  extra wide/max
   if (mode == bpl1 || mode == bpl1h) {
     // done with fetches....
-      // rundma... if hackbltro, only run if frame==3
-    for (int i = 0; i < bpu; i++) {
-      //rxdma(BPLxDAT(i), BPLxPTR(i), DMA_BPEN, "bpl");
-    }
-    renderbg(vPos, 1, totdma++);
+    renderbg(vPos);
+    totdma++;
   }
   return mode;
 }
@@ -2337,70 +2315,86 @@ uint16_t *spraddr(int n) {
   return (uint16_t *)&mem[SPR0DATA + (n * 8)];
 }
 
-// mode == 2: 4-color
-// mode == 99: 16-color
+// mode ==  2: 4-color
+// mode == 99: 16-color (attached)
 void amiga::renderspr(int y, int n, int mode, uint32_t *palette)
 {
   sprite_t *s = &sprites[n];
   uint16_t mask = 0x0080;
-  uint16_t *pd;
-  int x0 = s->x0;
+  int clr = 0;
+  int spx = s->x0;
   
+  auto spix = [&](int c) {
+    if (spx >= 0 && spx < 640 && c != 0) {
+      bgline[spx] = palette[c];
+      collide[spx] = (0x1 << n);
+    }
+    spx++;
+  };
+
   if (y < s->y0 || y >= s->y1) {
     // if scanline outside of sprite, exit
     return;
   }
-  pd = spraddr(n);
   // render 16 pixels
+  auto pd = spraddr(n);
   for (int i = 0; i < 16; i++) {
-    int clr = pclr(pd, mask, mode);
-    if (clr != 0 && (x0 + i) < 640) {
-      // 0 is transparent
-      bgline[x0 + i] = palette[clr];
-      collide[x0 + i] |= (0x1 << n);
-    }
-    mask = ror16(mask, 1);
+    clr = pclr(pd, mask, mode);
+    spix(clr);
   }
 }
 
 // Collision bits
-// | n/a |S4/S6|S2/S6|S2/S4|S0/S6 | S0/S4 | S0/S2|||P2/S6 | P2/S4 | P2/S2 | P2/S0|||P1/S6 | 
-int amiga::check_collide() {
-  int coll = 0;
-  auto cxbit = [&](int cond, int bit, const char *msg) {
-    bit = (1L << bit);
-    if (cond != 0 && !(coll & bit)) {
-      //printf("coll:%s\n", msg);
-      coll |= bit;
-    }
+// 14 | sp45 | sp67
+// 13 | sp23 | sp67
+// 12 | sp23 | sp45
+// 11 | sp01 | sp67
+// 10 | sp01 | sp45
+// 09 | sp01 | sp23
+// 08 | pf2  | sp67
+// 07 | pf2  | sp45
+// 06 | pf2  | sp23
+// 05 | pf2  | sp01
+// 04 | pf1  | sp67
+// 03 | pf1  | sp45
+// 02 | pf1  | sp23
+// 01 | pf1  | sp01
+// 00 | pf1  | pf2
+struct pair {
+  constexpr pair(uint16_t _a, uint16_t _b, uint16_t n) {
+    a = _a;
+    b = _b;
+    bit = (1L << n);
   };
+  uint16_t a, b, bit;
+};
+
+int amiga::check_collide() {
+  static constexpr pair cxtest[] = {
+    { CXPF1, CXPF2, 0 },
+    { CXPF1, CXSPR0, 1 },
+    { CXPF1, CXSPR2, 2 },
+    { CXPF1, CXSPR4, 3 },
+    { CXPF1, CXSPR6, 4 },
+    { CXPF2, CXSPR0, 5 },
+    { CXPF2, CXSPR2, 6 },
+    { CXPF2, CXSPR4, 7 },
+    { CXPF2, CXSPR6, 8 },
+    { CXSPR0, CXSPR2, 9 },
+    { CXSPR0, CXSPR4, 10 },
+    { CXSPR0, CXSPR6, 11 },
+    { CXSPR2, CXSPR4, 12 },
+    { CXSPR2, CXSPR6, 13 },
+    { CXSPR4, CXSPR6, 14 },
+  };
+  int coll = 0;
   // scan this line for collision
   for (int i = 0; i < 640; i++) {
     int ci = collide[i];
-    if (ci & CXSPR0) {
-      cxbit(ci & CXSPR2, 9,  "spr01->spr23");
-      cxbit(ci & CXSPR4, 10, "spr01->spr45");
-      cxbit(ci & CXSPR6, 11, "spr01->spr67");
-      cxbit(ci & CXPF2,  5,  "spr01->Even");
-      cxbit(ci & CXPF1,  1,  "spr01->odd");
-    }
-    if (ci & CXSPR2) {
-      cxbit(ci & CXSPR4, 12, "spr23->spr45");
-      cxbit(ci & CXSPR6, 13, "spr23->spr67");
-      cxbit(ci & CXPF2,  6,  "spr23->Even");
-      cxbit(ci & CXPF1,  2,  "spr23->odd");
-    }
-    if (ci & CXSPR4) {
-      cxbit(ci & CXSPR6, 14, "spr45->spr67");
-      cxbit(ci & CXPF2,  7,  "spr45->even");
-      cxbit(ci & CXPF1,  3,  "spr45->odd");
-    }
-    if (ci & CXSPR6) {
-      cxbit(ci & CXPF2, 8, "spr67->even");
-      cxbit(ci & CXPF1, 4, "spr67->odd");
-    }
-    if (ci & CXPF2) {
-      cxbit(ci & CXPF1, 0, "even->odd");
+    for (auto p : cxtest) {
+      if ((ci & p.a) && (ci & p.b)) {
+	coll |= p.bit;
+      }
     }
     // reset
     collide[i] = 0;
@@ -2409,6 +2403,7 @@ int amiga::check_collide() {
   return coll & ~0x1ff;;
 };
 
+// HBLANK, render line
 void amiga::sethblank(bool state) {
   if (state) {
     return;
@@ -2435,37 +2430,22 @@ void amiga::sethblank(bool state) {
       }
     }
     
+    // drawline to screen buffer.
+    drawline(scr, bgline, 640, 10, 10+y-screen.y0, 0);
+
     // Check for any collisions
     int cx = check_collide();
     if (cx) {
       xline(&bgline[630], 10, RED);
     }
     
-    // draw bgline color
-    int totlen = 0;
-    int start = 0;
-    if (hires()) {
-      totlen = (ddfstop - ddfstrt) * 4;
-      start = 0;
-    }
-    else {
-      totlen = (ddfstop - ddfstrt) * 2;
-      start = 0;
-    }
-    // drawline to screen buffer.
-    drawline(scr, bgline+start, 640, 10, 10+y-screen.y0, 0);
-
-    // clear bgline
+    // clear bgline to background
     xline(bgline, 640, cpal[0]);
 
-    if (bpl1mod || bpl2mod) {
-      printf("end mod: %.4x %.4x\n", (int)bpl1mod, (int)bpl2mod);
-    }
+    // increase plane mod
     for (int i = 0; i < bpu; i++) {
-      // increase plane mod
-      auto addr = BPLxPTR(i);
       int16_t mod = (i & 1) ? bpl2mod : bpl1mod;
-      blt_mod(addr, mod, 0, "bplmod");
+      blt_mod(BPLxPTR(i), mod, 0, "bplmod");
     }
     totdma = 0;
   }
@@ -2488,6 +2468,8 @@ bool amiga::vid_tick()
   vhposr = (vPos << 8) | hPos;
 
   if (hPos == 0) {
+    // start new line
+    ham = 0;
     bgx = 0;
     ndma = (ddfstop - ddfstrt);
     if (hires()) {
@@ -2501,6 +2483,7 @@ bool amiga::vid_tick()
     printf("wdma: %.2x %.2x %3d %d dly:%d, %d\n",
 	   (int)ddfstrt, (int)ddfstop, vPos, wdma,
 	   pf1shift(), pf2shift());
+    // clear out bitplane data
     for (int i = 0; i < 8; i++) {
       BPLxDAT(i) = 0;
     }
@@ -2532,12 +2515,12 @@ bool amiga::vid_tick()
 
     sbtn = scr->getmouse(smx, smy);
     cia_a.pra |= 0b0100'0000;
-    potimp = potimp | 1024;
+    potgor = potgor | 1024;
     if (sbtn & 1) {
       cia_a.pra &= 0b0011'1111;
     }
     if (sbtn & 2) {
-      potimp = potimp & 0xFBFF;
+      potgor = potgor & 0xFBFF;
     }
     
     uint8_t tx = (joy0dat & 0xFF) + (int8_t)(smx - old_x)*2;
@@ -2672,6 +2655,9 @@ void amiga::chip_write(uint32_t addr, uint32_t val, int n)
     break;
   case ADKCON: // disk control
     xsetclr(adkconr, val, "adkcon");
+    break;
+  case POTGO:
+    potgor = val;
     break;
   case DSKLEN:
     // write DMA_DSKEN to DMACON
@@ -2830,7 +2816,7 @@ static void *busread(uint32_t addr, uint32_t& val, int size)
   }
   switch(addr) {
   case 0x00000000 ... 0x001fffff: // chip ram
-  case 0x00200000 ... 0x005fffff: // fast ram
+    //case 0x00200000 ... 0x005fffff: // fast ram
   case 0x00c00000 ... 0x00dbffff: // pseudo fast ram
   case 0x00f80000 ... 0x00ffffff: // rom
     return &mem[addr];
@@ -2864,7 +2850,7 @@ static void *buswrite(uint32_t addr, uint32_t val, int size)
   addr &= 0xFFFFFF;
   switch (addr) {
   case 0x00000000 ... 0x001FFFFF:
-  case 0x00200000 ... 0x005fffff: // fast ram
+    //case 0x00200000 ... 0x005fffff: // fast ram
   case 0x00C00000 ... 0x00DBFFFF:
   case 0x00F80000 ... 0x00FFFFFF:
     return &mem[addr];
@@ -3241,6 +3227,7 @@ void waitfor(int vPos, int hPos) {
 
 int hackbltro()
 {
+#ifdef bltro
   uint16_t op;
   static int last;
   int nc = 1;
@@ -3282,12 +3269,16 @@ int hackbltro()
     }
   };
   return nc;
+#else
+  return 1;
+#endif
 }
 
 int main(int argc, char *argv[])
 {
   int n = 1;
   const char *romfile = "roms/de-amiga-os-130.rom";
+  const char *adf = "original2.adf";
   
   gentbl();
   setbuf(stdout, NULL);
@@ -3296,11 +3287,14 @@ int main(int argc, char *argv[])
     romfile = argv[2];
     n = 3;
   };
-  floppyLoad(0, "original2.adf");
-  for (int i=3; i < argc; i++) {
-    floppyLoad(i, argv[i]);
-  }
-  
+  if (argc > n+2 && !strcmp(argv[n], "-adf")) {
+    adf = argv[n+1];
+    n += 2;
+    printf("amiga: %s\n", adf);
+    exit(0);
+  };
+  floppyLoad(0, adf);
+
   // https://github.com/nicodex/amiga-ocs-cpubltro/blob/main/cpubltro.asm
   thegame.init(romfile); //"roms/de-amiga-os-130.rom");
   //thegame.init("cpubltro-0f8.rom");
