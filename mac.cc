@@ -1745,6 +1745,7 @@ int main(int argc, char *argv[])
     sys.register_handler(0x000000, 0xFFFFFF, 0xFFFFFF, memio, mem, _RW, "ram");
     read_json<M68k>(argv[2], m68kreg, mem, m68k_test_json);
   }
+#if 0
   if (argc > 1 && !strcmp(argv[1], "-test")) {
     // ori  0000.0000 00
     // andi 0000.0010 02
@@ -1786,6 +1787,7 @@ int main(int argc, char *argv[])
     decode_68k(0x72bc);
     exit(0);
   }
+#endif
   // Load disk image
   buf = loadrom(DISK, sz);
   setDrive(0, buf + DSKOFF, sz - DSKOFF);

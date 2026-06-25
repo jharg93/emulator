@@ -454,7 +454,7 @@ void Screen::draw() {
     for (int x=0; x < tw; x++) {
       int c = pixel(x, y);
       if (xs > 1 && ys > 1)
-	sdl_rect(x * xs, y * ys, xs, ys, pxl2rgb(c));
+	sdl_rect(x * xs, y * ys, xs, ys-1, pxl2rgb(c));
       else
 	sdl_rect(x, y, 1, 1, pxl2rgb(c));
     }
@@ -778,9 +778,6 @@ void draw_gradient(Screen *scr,
     const Point b = p2 - p0;
     return a.cross(b);
   };
-  auto ef2 = [](int c0, int v0, int c1, int v1) {
-    return (float)(c0 * v0) - (c1 * v1);
-  };
   int min_x = std::min({x0, x1, x2, 0});
   int min_y = std::min({y0, y1, y2, 0});
   int max_x = std::max({x0, x1, x2, scr->tw});
@@ -818,6 +815,7 @@ void draw_bpp(Screen *scr, int w, int h, const uint8_t *mem, const int pb, const
   }
 }
 
+// drawline to buffer if not -1
 void drawline(Screen *s, int *line, int w, int sx, int sy, int pb)  {
   for (int x = 0; x < w; x++) {
     if (line[x] != -1) {

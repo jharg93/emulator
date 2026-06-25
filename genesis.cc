@@ -293,9 +293,9 @@ void vdp_t::getscroll(int y, int *hs, int *vs)
   uint16_t addr;
 
   /* horizontal mask/shift
-   * full screen: mask=0000/0 FFFF BBBB
-   * 1-cell:      mask=fff8/4 FFFF BBBB 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000|FFFF BBBB ...
-   * scanline:    mask=FFFF/1 BBBB|FFFF BBBB ....
+   * full screen: mask=0000/0 F B
+   * 1-cell:      mask=FFF8/4 F B 0 0 0 0 0 0 0 0 0 0 0 0 0 0|F B ...
+   * scanline:    mask=FFFF/1 F B|F B ....
    */
   addr = ((y & hscroll_mask) << hscroll_shift);
   hs[0] = -(int16_t)get16be(&htab[addr + 1]);
@@ -303,8 +303,8 @@ void vdp_t::getscroll(int y, int *hs, int *vs)
   hs[2] = 20;
 
   /* vertical mask/shift
-   * full screen: mask=0000/1  FFFF BBBB
-   * 2-cell:      mask=FFF0/4  FFFF BBBB|FFFF BBBB ....
+   * full screen: mask=0000/1  F B
+   * 2-cell:      mask=FFF0/4  F B|F B ....
    */
   addr = ((y & vscroll_mask) >> vscroll_shift);
   vs[0] = (int16_t)vsram[addr + 1];
@@ -918,6 +918,10 @@ void genesis::init(uint8_t *buf, int size) {
  * oooo.xxx.XXX.YYY.yyy
  * oooo.xxx.oss.YYY.yyy : F1C0
 */
+
+// 3420 master cycles per scanline
+// m68k ~488 cycles per scanline
+// z80  ~228 cycles per scanline
 void genesis::run(int nn)
 {
   uint16_t op;

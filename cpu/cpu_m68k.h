@@ -46,15 +46,6 @@ std::map<uint32_t, std::string> rmap;
 
 static uint32_t ctick;
 static uint32_t eatick;
-static uint32_t _TR(int cyc, int rd=0, int wr=0) {
-  return (cyc << 8) + (rd << 4) + wr;
-};
-static void TR(int cyc, int rd=0, int wr=0) {
-  ctick += (cyc << 8) + (rd << 4) + wr;
-};
-static int EATR(int cyc, int rd, int wr) {
-  return (cyc << 8) + (rd << 4) + wr + 0x80000000;
-};
 
 enum {
   None  = 0x0,
@@ -170,53 +161,6 @@ static char eamap[] = {
 // __101 super data
 // __110 super code
 // __111 cpu
-
-int countTime(const char *s, int sz, int ew=-1, int el=-1, const char *lbl="") {
-  char ch;
-  int cyc=0,rd=0,wr=0;
-
-  auto tick_rd = [&](int n) { rd+=n; cyc+=4*n; };
-  auto tick_wr = [&](int n) { wr+=n; cyc+=4*n; };
-  for (int i = 0; (ch=s[i]) != 0; i++) {
-    switch(ch) {
-    case 'n': // 2 cycs
-      cyc+=2;
-      break;
-    case 'N': // 4 cycs
-      cyc+=4;
-      break;
-    case 'z': // word=0clk, long=4clk
-      if (sz == Long) {
-	cyc += 4;
-      }
-      break;
-    case 'p': // word = 1rd,4clk
-    case 'P': // long = 2rd,8clk
-      tick_rd(sz == Long && ch == 'P' ? 2 : 1);
-      break;
-    case 'r': // word = 1rd/4clk
-    case 'R': // long = 2rd/8clk
-      tick_rd(sz == Long && ch == 'R' ? 2 : 1);
-      break;
-    case 'w': // word = 1wr/4clk
-    case 'W': // long = 2wr/8clk
-      tick_wr(sz == Long && ch == 'W' ? 2 : 1);
-      break;
-    case 'u': // stack
-      tick_rd(1);
-      break;
-    }
-  }
-  int ct = (cyc << 8) + (rd << 4) + wr;
-  if (ew != -1 && sz == Word && ew != ct) {
-    printf("countword: exp:%.4x got:%.4x %s [%s]\n", ew, ct, s, lbl);
-  }
-  if (el != -1 && sz == Long && el != ct) {
-    printf("countlong: exp:%.4x got:%.4x %s [%s]\n", el, ct, s, lbl);
-  }
-  return ct;
-}
-
 enum {
   VECTOR_0 = 0,
   VECTOR_1,
@@ -262,18 +206,18 @@ const char *condstr[] = {
 static uint32_t sregs[20];
 
 /* ADR modes
- * 0  000 rrr  Dn                   0(0/0)   0(0/0)
- * 1  001 rrr  An                   0(0/0)   0(0/0)
- * 2  010 rrr  (An)                 4(1/0)   8(2/0)
- * 3  011 rrr  (An)+                4(1/0)   8(2/0)
- * 4  100 rrr  -(An)                6(1/0)  10(2/0)
- * 5  101 rrr  (d16,An)      imm    8(2/0)  12(3/0) 
- * 6  110 rrr  (d8,An,Xn)    imm   10(2/0)  14(3/0) 
- * 7  111 000  (xxx).W       imm    8(2/0)  12(3/0)
- * 8  111 001  (xxx).L       imm   12(3/0)  16(4/0)
- * 9  111 010  (d16,PC)      imm    8(2/0)  12(3/0)
- * a  111 011  (d8,PC,Xn)    imm   10(2/0)  14(3/0)
- * b  111.100  #imm          imm    4(1/0)   8(2/0)
+ * 0  000 rrr  Dn                 0(0/0)   0(0/0)
+ * 1  001 rrr  An                 0(0/0)   0(0/0)
+ * 2  010 rrr  (An)               4(1/0)   8(2/0)
+ * 3  011 rrr  (An)+              4(1/0)   8(2/0)
+ * 4  100 rrr  -(An)              6(1/0)  10(2/0)
+ * 5  101 rrr  (d16,An)      W    8(2/0)  12(3/0) 
+ * 6  110 rrr  (d8,An,Xn)    W   10(2/0)  14(3/0) 
+ * 7  111 000  (xxx).W       W    8(2/0)  12(3/0)
+ * 8  111 001  (xxx).L       L   12(3/0)  16(4/0)
+ * 9  111 010  (d16,PC)      W    8(2/0)  12(3/0)
+ * a  111 011  (d8,PC,Xn)    W   10(2/0)  14(3/0)
+ * b  111.100  #imm         BWL   4(1/0)   8(2/0)
  * c  111.101  ---
  * d  111.110  ---
  * e  111.111  ---
@@ -323,10 +267,6 @@ static void setval(uint32_t& dst, const uint32_t src, const int size, const uint
  * | trace | S | M | 0 |    ipl    | 0 | 0 | 0 | X | N | Z | V | C |
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
  */
-
-// needded for m68test.bin
-//SR_VALIDBITS_HI=0xA700;
-//SR_VALIDBITS_LO=0x00FF;
 uint16_t SR_VALIDBITS_HI=0xA700;
 uint16_t SR_VALIDBITS_LO=0x001F;
 
@@ -1323,7 +1263,6 @@ static void m68k_muls(instr_t& i, int16_t dx, int16_t src)
 /* Unsigned divide */
 static void m68k_divu(uint32_t& dx, uint32_t src)
 {
-  EATR(140,1,0);
   if (src == 0) {
     m68k_trap(true, VECTOR_DIVIDE_BY_ZERO);
   }
@@ -1345,7 +1284,6 @@ static void m68k_divu(uint32_t& dx, uint32_t src)
 /* Signed divide */
 static void m68k_divs(uint32_t& dx, int16_t src)
 {
-  EATR(158,1,0);
   if (src == 0) {
     m68k_trap(true, VECTOR_DIVIDE_BY_ZERO);
   }
@@ -1656,27 +1594,6 @@ static uint32_t bmask(instr_t& i, uint32_t v, int& size)
   return (1L << (v & 0x07));
 }
 
-// p = 4(1/0)
-// r = 4(1/0)
-// imm.dy    static.reg.long   10(2/0)  read.p, read.imm, read.dy   pE (6.1.0)
-// imm.mem   static.mem.byte   8(2/0)+  read.p, read.imm, read.ea   pE (4.1.0)
-// dx,dy     dynamic.reg.long  6(1/0)   read.p  read.dx,  read.dy   pE (2.0.0)
-// dx,mem    dynamic.reg.byte  4(1/0)+  read.p, read.dx,  read.ea   pE (0.0.0)
-#if 0
-int rt() {
-  ddx = (op & 0x38);
-  switch ((op >> 6) & 7) {
-  case 0b000: btst imm return ddx ? EATR(8,2,0,op)  : TR(10,2,0);
-  case 0b001: bchg imm return ddx ? EATR(12,2,1,op) : TR(12,2,0);
-  case 0b010: bclr imm return ddx ? EATR(12,2,1,op) : TR(14,2,0);
-  case 0b011: bset imm return ddx ? EATR(12,2,1,op) : TR(12,2,0);
-  case 0b100: btst ex  return ddx ? EATR(4,1,0,op) : TR(6,1,0);
-  case 0b101: bchg dx  return ddx ? EATR(8,1,1,op) : TR(8,1,0);
-  case 0b110: bclr dx  return ddx ? EATR(8,1,1,op) : TR(10,1,0);
-  case 0b111: bset dx  return ddx ? EATR(8,1,1,op) : TR(8,1,0);
-  }
-}
-#endif
 static void m68k_btst(instr_t& i, uint32_t src1, uint32_t src2, int size=None)
 {
   src2 = bmask(i, src2, size);
@@ -2083,83 +2000,6 @@ opcode_t optab[] = {
 };
 #undef o
 
-void ckit(const char *s, int ew, int el, const char *lbl) {
-  countTime(s, Word, ew, el, lbl);
-  countTime(s, Long, ew, el, lbl);
-}
-
-const char *et[] = {
-  "____", //dn
-  "____", //an
-  "___R", //(an)
-  "___R", //(an)+
-  "n__R", //-(an)
-  "__pR", //(d16,an)
-  "n_pR", //(xn,an)
-  "__pR", //w
-  "_ppR", //l
-  "__pR", //(d16,pc)
-  "n_pR", //(xn,pc)
-  "__P_", //#imm
-};
-
-void testtiming() {
-  // Effective address times
-  ckit("____", 0x000, 0x000, "dn"); // dn/an
-  ckit("___R", 0x410, 0x820, "(an)"); // (an)
-  ckit("___R", 0x410, 0x820, "(an)+"); // (an)+
-  ckit("n__R", 0x610, 0xa20, "-(an)"); // -(an)
-  ckit("__pR", 0x820, 0xc30, "(an,16)"); // (an,16)
-  ckit("n_pR", 0xa20, 0xe30, "(an,xn)"); // (an,xn)
-  ckit("__pR", 0x820, 0xc30, "w"); // w
-  ckit("_ppR", 0xc30, 0x1040,"l");// l
-  ckit("__pR", 0x820, 0xc30, "(pc,16)"); // (pc,16)
-  ckit("n_pR", 0xa20, 0xe30, "(pc,xn)"); // (pc,xn)
-  ckit("__P_", 0x410, 0x820, "imm"); // imm
-
-  // eori
-  ckit("P.E.pz", 0x820, 0x1030, "eori.dn"); // dn
-  ckit("P.E.pW", 0xc21, 0x1432, "eori.m");  // m
-  
-  // oriccr
-  // 0000
-  ckit("pNNpp", 0x1430, 0x1430, "oriccr");
-
-  // cmpi
-  ckit("P.E.pz", 0x820, 0xe30, "cmpi.dn");
-  ckit("P.E.p", 0x820, 0x0c30, "cmpi.m");
-
-  // movefromsr,nbcd
-  ckit("E.pn", 0x610, 0x610, "movefrmsr.reg");
-  ckit("E.pw", 0x811, 0x811, "movefmsr.mem");
-
-  // movetoccr/sr
-  ckit("E.NNp", 0xc10, 0xc10, "movetoccr/sr");
-
-  // swap, ext, moveusp, nop
-  ckit("p", 0x410, 0x410, "swap");
-
-  // tst
-  ckit("E.p", 0x410, 0x410, "tst");
-
-  // tas
-  ckit("E.p", 0x410, 0x410, "tas.reg");
-  ckit("E.nwp", 0xa11,0xa11, "tas.mem");
-
-  // unlk
-  ckit("ppp", 0xc30,0xc30, "unlk");
-
-  // stop
-  ckit("nn", 0x400, 0x400, "stop");
-
-  // rts
-  ckit("uupp", 0x1040, 0x1040, "rts");
-  ckit("uuupp", 0x1450, 0x1450, "rte");
-
-  // rotate memory 1,ea
-  ckit("E.rw", 0x811, 0x811, "rotate");
-}
-
 // ffff.xxx.-ss.mmm.yyy
 const char *an(int n) {
   switch(n) {
@@ -2289,9 +2129,9 @@ uint32_t cpu_fetch(const int size, const char *lbl) {
 uint32_t cpu_read(uint32_t addr, int size) {
   m68k_check_address(addr, size, Sf ? 0x15 : 0x11, "read");
   switch (size) {
-  case Byte: TR(4,1,0); return cpu_read8(addr);
-  case Word: TR(4,1,0); return cpu_read16(addr);
-  case Long: TR(8,2,0); return cpu_read32(addr);
+  case Byte: return cpu_read8(addr);
+  case Word: return cpu_read16(addr);
+  case Long: return cpu_read32(addr);
   default:
     Assert(0);
   }
@@ -2300,9 +2140,9 @@ uint32_t cpu_read(uint32_t addr, int size) {
 void cpu_write(uint32_t addr, uint32_t val, int size) {
   m68k_check_address(addr, size, Sf ? 0x05 : 0x01, "write");
   switch(size) {
-  case Byte: TR(4,0,1); cpu_write8(addr, val); break;
-  case Word: TR(4,0,1); cpu_write16(addr, val); break;
-  case Long: TR(8,0,2); cpu_write32(addr, val); break;
+  case Byte: cpu_write8(addr, val); break;
+  case Word: cpu_write16(addr, val); break;
+  case Long: cpu_write32(addr, val); break;
   default:
     Assert(0);
   }
@@ -2446,30 +2286,5 @@ void dumpcfg(int off, int base, int size)
   }
   stk.showstk(128);
   exit(0);
-}
-
-void tt(int exp, int n, ...)
-{
-  int pc = 0x1000;
-  va_list ap;
-  uint32_t nn[6];
-
-  va_start(ap, n);
-  m68k_setpc(0x1000, false, "xx");
-  for (int i = 0; i < n; i++) {
-    nn[i] = va_arg(ap, int);
-    cpu_write16(pc, nn[i]);
-    pc += 2;
-  }
-  decode_68k(cpu_fetch(Word, "op"));
-  if (ctick != exp) {
-    printf("ticks: exp:%.6x got:%.6x\n", exp, ctick);
-  }
-}
-
-void test_timing()
-{
-  trace = 1;
-  tt(0x0, 1, 0b1101'000'000'000'001);
 }
 #endif

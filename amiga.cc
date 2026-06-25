@@ -2258,7 +2258,7 @@ void amiga::renderbg(int y)
   }
 }
 
-#define bltrox
+#define bltro
 int amiga::bpdma(int mode) {
   int nm = (hPos & 1) ? Odd : Even;
 
@@ -2277,14 +2277,14 @@ int amiga::bpdma(int mode) {
   }
 #ifdef bltro
   // rundma... if hackbltro, only run if frame==3
-  if (frame != 3) {
-    return nm;
+  if (frame == 3) {
+    rxdma(BPLxDAT(bp), BPLxPTR(bp), DMA_BPEN, "bpl");
   }
-#endif
-
+#else
   // dma this bitplane
   rxdma(BPLxDAT(bp), BPLxPTR(bp), DMA_BPEN, "bpl");
-
+#endif
+  
   // ddfstrt  ddfstop
   //      38       d0  normal
   //      40       c8  narrow
@@ -3296,8 +3296,8 @@ int main(int argc, char *argv[])
   floppyLoad(0, adf);
 
   // https://github.com/nicodex/amiga-ocs-cpubltro/blob/main/cpubltro.asm
-  thegame.init(romfile); //"roms/de-amiga-os-130.rom");
-  //thegame.init("cpubltro-0f8.rom");
+  //thegame.init(romfile); //"roms/de-amiga-os-130.rom");
+  thegame.init("cpubltro-0f8.rom");
   //thegame.init("emutos-amiga-rom-1.3//emutos-amiga.rom");
   //thegame.init("DiagROM/16bit.bin");
   

@@ -276,21 +276,6 @@ void flogger(int lvl, const char *fmt, ...)
   }
 }
 
-enum {
-  NONE, RAM, ROMLO, ROMHI, BASIC, KERNAL, IOR, CHAR
-};
-
-const char *mapregvals[] = {
-  "none",
-  "ram",
-  "rlo",
-  "rhi",
-  "bsc",
-  "knl",
-  "ior",
-  "chr"
-};
-
 const char *comment(int addr) {
   if (addr == -1)
     return "";
@@ -327,6 +312,21 @@ const char *comment(int addr) {
 // C000-CFFF : ram*
 // D000-DFFF : ram,io,char,
 // E000-FFFF : ram,kernel,carthi
+enum {
+  NONE, RAM, ROMLO, ROMHI, BASIC, KERNAL, IOR, CHAR
+};
+
+const char *mapregvals[] = {
+  "none",
+  "ram",
+  "rlo",
+  "rhi",
+  "bsc",
+  "knl",
+  "ior",
+  "chr"
+};
+
 struct bmap_t {
   uint8_t bank8, bankA, bankD, bankE;
 } bankmap[] = {
@@ -370,6 +370,16 @@ struct bmap_t {
 
 struct c64;
 
+struct UserPort {
+  uint8_t pa_in;
+  uint8_t pa_out;
+  bool flag_prev;
+  bool cnt;
+  bool sp;
+  
+  void tick(c64*c);
+};
+
 /* DC0D cia1 irq
  *  bit 0: timer a underflow
  *  bit 1: timer b underflow
@@ -388,7 +398,6 @@ struct c64;
  */
 uint8_t getkp(c64 *c);
 void setvicbase(c64 *c, int v);
-void serialio(uint8_t& val, bool read);
 
 #include "cia.h"
 struct cia64_t : public cia_t {
@@ -405,6 +414,7 @@ struct cia64_t : public cia_t {
     bool ta = tmra.tick();
     bool tb = false;
 
+    // what type of tick is this
     switch ((regs[CRB] >> 5) & 3) {
     case 0b00: tb = tmrb.tick(); break;
     case 0b01: assert(0); break;
@@ -421,11 +431,23 @@ struct cia64_t : public cia_t {
 void cia64_t::Setreg(c64 *c, int n, uint8_t val) {
   assert(n <= 0xF);
   cia_t::setreg(n, val);
-
+  char io[] = "io";
+  
   printf("cia%d.set %x = %.2x\n", id, n, val);
+  if (n == DDRA || n == DDRB) {
+    printf("cia%d:ddr%c: %c%c%c%c%c%c%c%c\n",
+	   id, (n == DDRA) ? 'a' : 'b',
+	   io[!!(val & 0x80)],
+	   io[!!(val & 0x40)],
+	   io[!!(val & 0x20)],
+	   io[!!(val & 0x10)],
+	   io[!!(val & 0x08)],
+	   io[!!(val & 0x04)],
+	   io[!!(val & 0x02)],
+	   io[!!(val & 0x01)]);
+  }
   if (id == 2 && n == PRA) {
-      setvicbase(c, val);
-      serialio(val, false);
+    setvicbase(c, val);
   };
 }
 
@@ -433,9 +455,6 @@ uint8_t cia64_t::Getreg(c64 *c, int n) {
   assert(n <= 0xF);
   uint8_t val = cia_t::getreg(n);
   printf("cia%d.get %x = %.2x\n", id, n, val);
-  if (id == 2 && n == PRA) {
-    serialio(val, true);
-  }
   if (id == 1 && n == PRB) {
     val = getkp(c);
   }
@@ -502,6 +521,7 @@ struct c64 : public bus_t {
 
   cia64_t cia1;
   cia64_t cia2;
+  UserPort uport;
   
   // Keyboard press
   uint8_t  key_row[8];
@@ -893,38 +913,6 @@ enum {
 #define TXCLK 0x10
 #define ATN   0x08
 #define DATA  0x04
-
-/* 0:0v = true/down
- * 1:5v = false/released
- * data valid on rising edge of clock
- *
- * 3:atn out
- * 4:clk out
- * 5:data out
- * 6:clk in
- * 7:data in
- */
-void serialio(uint8_t& val, bool read)
-{
-  static int state = sIDLE;
-  static int oldval;
-  
-  switch (state) {
-  case sIDLE:
-    printf("IDLE state\n");
-    if ((val & ATN) && !(oldval & ATN)) {
-      oldval = val & ~3;
-      state = sATN;
-      printf("Attention bit set!!!\n");
-    }
-    break;
-  case sATN:
-    printf("ATN state: %x %d, %d, %d\n", val, !!(val & TX), !!(val & RX), !!(val & DATA));
-    if (read)
-      val ^= 0x80;
-    break;
-  };
-}
 
 /* DD00: r  pra
  * DD01: r  prb
@@ -2063,6 +2051,9 @@ void c64::drawframe()
       screen->scrline(0, i, 320+2*EY, 3);
     }
   }
+  int lx = (SCREEN_XRES - 8 * cols)/2;
+  int ly = (SCREEN_YRES - 8 * rows)/2;
+  screen->scrbox(lx, ly, SCREEN_XRES - lx, SCREEN_YRES - ly, 8);
   memset(sli, 0, sizeof(sli));
   screen->draw();
 
@@ -2098,9 +2089,32 @@ uint8_t cpu_read8(uint32_t offset, int type)
   return v;
 }
 
-void  cpu_write8(uint32_t offset, uint8_t v, int type)
+void cpu_write8(uint32_t offset, uint8_t v, int type)
 {
   thegame.write(offset, v);
+}
+
+void UserPort::tick(c64 *c) {
+  uint8_t ddr = c->cia2.regs[DDRA];
+  uint8_t &pra = c->cia2.regs[PRA];
+
+  auto sc = [&](bool cond, auto& v, auto mask) {
+    v = (cond) ? (v | mask) : (v & ~mask);
+  };
+  pra &= 0x3f;
+  pra |= (pa_in & 0xc0);
+  
+  bool pa3 = (ddr & pra & 0x08) != 0;
+  bool pa4 = (ddr & pra & 0x10) != 0;
+  bool pa5 = (ddr & pra & 0x20) != 0;
+  printf("pa543 = %x%x%x\n", pa5, pa4, pa3);
+  sc(!pa4, pa_in, 0x40);
+  sc(!pa5, pa_in, 0x80);
+  if (!pa3 && flag_prev) {
+    c->cia1.cia_irq.set(CIA1_IRQ_DATASETTE);
+    printf("trip flag\n");
+  }
+  flag_prev = pa3;
 }
 
 /* HBlank = (504-403)
@@ -2145,6 +2159,7 @@ void c64::ppu_tick()
   }
   if (is_badline(row)) {
     screen->scrline(0, row, EX, COLS() == 40 ? 3 : 4);
+    screen->scrtext(SCREEN_XRES-48, row, 11, "%d%c%d%c", cols, 'a' + XSCROLL(), rows, 'a' + YSCROLL());
   }
   /* Row is Displayed video line */
   if (row >= 0 && row < 200) {
@@ -2221,6 +2236,8 @@ void c64::run(const char *prgfile)
   }
   cpu_reset(iPC);
   for(;;) {
+    if  (SPC == 0x9215)
+      trace=1;
     if (hlt) {
       hexdump(ram, 65536, 32);
       exit(0);
@@ -2230,6 +2247,7 @@ void c64::run(const char *prgfile)
       // tick ppu,sid
       cia1.tick();
       cia2.tick();
+      uport.tick(this);
       ppu_tick();
       sid_tick();
     }

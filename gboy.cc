@@ -35,6 +35,9 @@ struct gboam_t {
   uint8_t x;
   uint8_t tid;
   uint8_t attr;
+
+  int XPOS() const { return x - 8; };
+  int YPOS() const { return y - 16; };
 };
 
 int show_lyc;
@@ -1128,7 +1131,7 @@ int gameboy::getsprite(oam_t *o, int id, int y)
 
   /* Get sprite position, size and attributes */
   o->setres(gboam[id].x - 8, gboam[id].y - 16,
-	    8, thegame.r_LCDC & LCDC_SPRITE_SZ ? 16 : 8,
+	    8, r_LCDC & LCDC_SPRITE_SZ ? 16 : 8,
 	    gboam[id].attr);
   if (!inrange(y, o->YPOS(), o->HEIGHT()))
     return -1;
@@ -1307,32 +1310,32 @@ void gameboy::drawline(int y)
     return;
 
   /* Get Sprites on this line */
-  nspr = getsprites(y, spr);
-  if (ntflag & 0x1)
-    nspr = 0;
-
-  /* Sort by X-priority for DMG */
-  if (!isCGB) {
-    qsort(spr, nspr, sizeof(oam_t), sprsort);
-  }
-
-  /* Draw sprite line */
-  for (int i = nspr-1; i >= 0; i--) {
-    oam_t s = spr[i];
-    sx = s.XPOS();
-    sy = y - s.YPOS();
-    if (isCGB) {
-      getpal(pal, ((s.attr & 7) * 4) + 0x40);
+  if ((ntflag & 0x1) == 0) {
+    nspr = getsprites(y, spr);
+    
+    /* Sort by X-priority for DMG */
+    if (!isCGB) {
+      qsort(spr, nspr, sizeof(oam_t), sprsort);
     }
-    else {
-      getpal(pal, s.attr & ATTR_PALETTE ? r_OBP1 : r_OBP0);
-    }
-    for (int x = 0; x < s.WIDTH(); x++) {
-      pxl = s.getpixel(x, sy);
-      if (pxl) {
-	sprline[sx+x].valid = true;
-	sprline[sx+x].pri = s.PRI();
-	sprline[sx+x].pxl = pal[pxl];
+    
+    /* Draw sprite line */
+    for (int i = nspr-1; i >= 0; i--) {
+      oam_t s = spr[i];
+      sx = s.XPOS();
+      sy = y - s.YPOS();
+      if (isCGB) {
+	getpal(pal, ((s.attr & 7) * 4) + 0x40);
+      }
+      else {
+	getpal(pal, s.attr & ATTR_PALETTE ? r_OBP1 : r_OBP0);
+      }
+      for (int x = 0; x < s.WIDTH(); x++) {
+	pxl = s.getpixel(x, sy);
+	if (pxl && (sx+x) < 160) {
+	  sprline[sx+x].valid = true;
+	  sprline[sx+x].pri = s.PRI();
+	  sprline[sx+x].pxl = pal[pxl];
+	}
       }
     }
   }

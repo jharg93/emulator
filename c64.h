@@ -132,6 +132,24 @@
  * D800 Charset High
  */
 
+/* CIA1 registers
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |krow7|krow6|krow5|krow4|krow3|krow2|krow1|krow0| pra
+ * |     |     |     |j2f  |j2rt |j2lf |j2dn |j2up | 
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |kcol7|kcol6|kcol5|kcol4|kcol3|kcol2|kcol1|kcol0| pra
+ * |     |     |     |j1f  |j1rt |j1lf |j1dn |j1up | 
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * CIA2
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |datai|clki |datao|clko |atno |txd  |va15 |va14 |
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ * |uptmb|uptmb|pb5  |pb4  |pb3  |pb2  |pb1  |pb0  |
+ * +-----+-----+-----+-----+-----+-----+-----+-----+
+ *  cia2.ddra
+ *    3,4,5 = o
+ *    6,7 = i
+ */
 #define CHIPREG(o)				\
   o(0x0000, CPU_DDR)				\
   o(0x0001, CPU_PORT)				\
@@ -246,5 +264,11 @@
   o(0xDD0d, CIA2_ICR)				\
   o(0xDD0e, CIA2_CRA)				\
   o(0xDD0f, CIA2_CRB)				\
+
+enum {
+#define o(a,n) n = a,
+  CHIPREG(o)
+#undef o
+};
 
 #endif

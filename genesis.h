@@ -138,13 +138,19 @@
  *     H  = horizontal flip
  *     tile = tile index (address = index*0x20)
  */
+enum {
+  VFLIP = 0x10,
+  HFLIP = 0x08,
+};
+
 #define NT_SIZE          2
 #define NT_ADDR(x,y,w)   ((((y/8))*(w/8) + (x/8))*NT_SIZE)
 #define NT_ATTR(x)       get16be(x)
-#define NT_PRI(x)        (((x) & 0x8000) != 0)
-#define NT_PAL(x)        ((((x) >> 13) & 3) * 16)
-#define NT_FLAGS(x)      (((x) >> 8) & (HFLIP|VFLIP))
-#define NT_TILE(x)       (((x) & 0x7FF) * 0x20)
+
+constexpr auto NT_PRI(auto x)   { return (x & 0x8000) != 0; };
+constexpr auto NT_PAL(auto x)   { return ((x >> 13) & 3) * 16; };
+constexpr auto NT_FLAGS(auto x) { return ((x >> 8) & (HFLIP|VFLIP)); };
+constexpr auto NT_TILE(auto x)  { return ((x & 0x7FF) * 32); };
 
 /*
  * Horiz scrolling: reg 0xd, 0xb
@@ -168,9 +174,6 @@
 
 
 enum {
-  VFLIP = 0x10,
-  HFLIP = 0x08,
-
   VDP_STATUS_PAL = 0x01,
   VDP_STATUS_DMA = 0x02,
   VDP_STATUS_HB = 0x04,
