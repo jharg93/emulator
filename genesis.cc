@@ -476,7 +476,7 @@ void vdp_t::renderline(int y)
     return;
   }
 
-  /* Get sprites on this line*/
+  /* Get sprites on this line */
   nspr = getsprites(y, spr);
 
   /* set line to background color */
@@ -541,7 +541,6 @@ void vdp_t::drawframe()
 void vdp_t::setreg(int r, uint8_t v)
 {
   if (vdp_reg[4] & 0x4 || r <= 10) {
-    printf("setreg: %.2x = %.2x\n", r, v);
     vdp_reg[r] = v;
     switch (r) {
     case 1:
@@ -645,10 +644,8 @@ void vdp_t::setvblank(bool state) {
 }
 
 void vdp_t::sethblank(bool state) {
-  if (state == true) {
-    if (inrange(vPos, 0, vBlank)) {
-      renderline(vPos);
-    }
+  if (state == true && inrange(vPos, 0, vBlank)) {
+    renderline(vPos);
   }
   setclr(vdp_status, VDP_STATUS_HB, state);
 }
@@ -936,8 +933,11 @@ void genesis::run(int nn)
     SPC = PC;
     check_irq();
 #if 1
-    if (visited[PC] == 0)
+    trace=0;
+    if (visited[PC] == 0) {
       visited[PC] = 1;
+      trace=2;
+    }
 #endif
     op = cpu_fetch(Word);
     decode_68k(op);

@@ -14,6 +14,7 @@ static inline int dlogger(const char *fmt, ...) {
 };
 
 struct dstk {
+  uint32_t last;
   uint32_t len;
   uint32_t base = 0;
   std::vector<uint8_t> _stk;
@@ -81,12 +82,24 @@ public:
   
   /* Pop next unvisited address */
   int pop() {
+#if 1
+    uint32_t start = last;
+    do {
+      uint32_t i = last;
+      last = (last + 1) % len;
+      if ((_stk[i] & (PENDING|VISITED)) == PENDING) {
+	_stk[i] |= VISITED;
+	return i + base;
+      }
+    } while (last != start);
+#else
     for (uint32_t i = 0; i < len; i++) {
       if ((_stk[i] & (PENDING|VISITED)) == PENDING) {
 	_stk[i] |= VISITED;
 	return i + base;
       }
     };
+#endif
     return -1;
   };
 };

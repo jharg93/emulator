@@ -7,15 +7,23 @@
 #include <setjmp.h>
 #include <time.h>
 
-int csrc[16], cdst[16];
- 
+void ncpu_push16(uint16_t nv, const char *lbl = NULL) {
+  if (lbl)
+    printf("push16: [%s] %.8x\n", lbl, nv);
+  cpu_push16(nv);
+}
+
+void ncpu_push32(uint32_t nv, const char *lbl = NULL) {
+  if (lbl)
+    printf("push32: [%s] %.8x\n", lbl, nv);
+  cpu_push32(nv);
+}
+
 #define Assert(x) do { if (!(x)) { printf("assertion failed : %s %s\n", __FUNCTION__, #x); assert(x); }}  while(0);
  
 #define ta(a,b) (((T_ ## a) << 8) + (T_ ## b))
  
-#define Assert(x) do { if (!(x)) { printf("assertion failed : %s %s\n", __FUNCTION__, #x); assert(x); }}  while(0);
-
-static bool m68k_trap(bool cond, int n);
+static bool m68k_trap(bool cond, int n, const char *s="");
 static bool m68k_trapa(bool cond, int n, uint32_t addr, int ir = 0, int code = 0, const char *lbl="");
 void m68k_emul1010(uint16_t);
 void m68k_emul1111(uint16_t);
@@ -32,8 +40,8 @@ static int _VBR;
 static uint32_t leaval;
 static jmp_buf trapjmp;
 int SPC, trace;
+int eapc;
 int ipl = 0;
-int sushi = 0;
 int stopped;
 
 uint32_t m68k_busmask = -1;
@@ -42,10 +50,22 @@ std::map<uint32_t, uint32_t> visited;
 std::map<uint32_t, std::string> fnmap;
 std::map<uint32_t, std::string> rmap;
 
+const char *iorname(uint32_t addr) {
+  return rmap[addr].c_str();
+}
+
+const char *fnname(uint32_t addr) {
+  return fnmap[addr].c_str();
+}
+
 #define ta(a,b) (((T_ ## a) << 8) + (T_ ## b))
 
 static uint32_t ctick;
 static uint32_t eatick;
+
+auto TR = [](uint32_t tr) {
+  ctick += tr;
+ };
 
 enum {
   None  = 0x0,
@@ -88,11 +108,11 @@ enum {
   EA_dec_An    = 0x4,
   EA_d16_An    = 0x5,
   EA_Xn8_An    = 0x6,
-  EA_off_16    = 0x7+0,
-  EA_off_32    = 0x7+1,
-  EA_d16_PC    = 0x7+2,
-  EA_Xn8_PC    = 0x7+3,
-  EA_imm_sz    = 0x7+4,
+  EA_off_16    = 0x7,
+  EA_off_32    = 0x8,
+  EA_d16_PC    = 0x9,
+  EA_Xn8_PC    = 0xa,
+  EA_imm_sz    = 0xb,
 
   /* 68020+ */
   EA_Xn0_An    = 0x10, // (bd,An,Xn)
@@ -115,10 +135,16 @@ enum {
   Dx_Ay    = ta(Dx,Ay),
   
   rAy     = ta(Ay,0),       // ____.___.___.___.yyy :notused Ay (ref)
+  rAx     = ta(Ax,0),
   rDy     = ta(Dy,0),       // ____.___.___.___.yyy :notused Dy (ref)
+  rDx     = ta(Dx,0),
   Ay16_Dx = ta(Ay16,Dx),    // ____.xxx.___.___.yyy
   iAyx    = ta(iAy,iAx),    // ____.xxx.___.___.yyy :cmpm          
-  dAyx    = ta(dAy,dAx),    // ____.xxx.___.___.yyy :sbcd,subx,abcd,addx         
+  dAyx    = ta(dAy,dAx),    // ____.xxx.___.___.yyy :sbcd,subx,abcd,addx
+  dAy     = ta(dAy,0),
+  dAx     = ta(dAx,0),
+  iAy     = ta(iAy,0),
+  iAx     = ta(iAx,0),
   Dy_Dx   = ta(Dy,Dx),      // ____.xxx.___.___.yyy :notused
   Dx_Dy   = ta(Dx,Dy),      // ____.xxx.___.___.yyy :notused
   SR_EA   = ta(SR,EA),      // ____.___.___.mmm.yyy :notused SR
@@ -130,15 +156,8 @@ enum {
   EA_Dx   = ta(EA,Dx),      // z ____.xxx.___.mmm.yyy :notused Dx
   EA_EA2  = ta(EA,EA2),     // ____.xxx.MMM.mmm.yyy
   Branch  = ta(BRANCH,0),
-
-  aXOR = 0x100,
-  aAND,
-  aOR,
-  aCMP,
-  aBTST,
-  aBSET,
-  aBCHG,
-  aBCLR,
+  rUSP    = 0,
+  EA2     = ta(EA2,0),
 };
 
 static char eamap[] = {
@@ -180,6 +199,8 @@ enum {
   _XNZVC = 0x3,
 };
 
+// cpu registers
+static uint32_t   sregs[20];
 static uint32_t   regs[20];
 static uint32_t   *D = &regs[0];
 static uint32_t   *A = &regs[8];
@@ -189,21 +210,13 @@ static uint32_t& usp = regs[17];
 static uint32_t& ssp = regs[18];
 
 static uint32_t   SR;
-static uint8_t&   CCR = *(uint8_t *)&SR;
 
 #define USP       ((SR & 0x2000) ? usp : SP)
 
-const char *regnames[] = {
+static const char *regnames[] = {
   "D0","D1","D2","D3","D4","D5","D6","D7",
   "A0","A1","A2","A3","A4","A5","A6","A7",
 };
-
-const char *condstr[] = {
-  "ra", "sr", "hi", "ls", "cc", "cs", "ne", "eq",
-  "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le"
-};
-
-static uint32_t sregs[20];
 
 /* ADR modes
  * 0  000 rrr  Dn                 0(0/0)   0(0/0)
@@ -309,6 +322,10 @@ enum {
   ccT,  ccF,  ccHI, ccLS, ccCC, ccCS, ccNE, ccEQ,
   ccVC, ccVS, ccPL, ccMI, ccGE, ccLT, ccGT, ccLE
 };
+static const char *condstr[] = {
+  "ra", "sr", "hi", "ls", "cc", "cs", "ne", "eq",
+  "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le"
+};
 
 /* there are 16 possible values for NZVC
  * use this as the index to a table
@@ -380,14 +397,6 @@ constexpr int opsize(const uint16_t op, const int sz) {
   return sz;
 }
 
-const char *iorname(uint32_t addr) {
-  return rmap[addr].c_str();
-}
-
-const char *fnname(uint32_t addr) {
-  return fnmap[addr].c_str();
-}
-
 static void m68k_setpc(uint32_t npc, bool call, const char *lbl)
 {
   if (lbl){
@@ -438,14 +447,14 @@ static void m68k_setsr(uint32_t nv, int size)
   if (size == Byte) {
     SR = (SR & SR_VALIDBITS_HI) + (nv & SR_VALIDBITS_LO);
   }
-  else if (!m68k_trap(!Sf, VECTOR_PRIVILEGE)) {
+  else if (!m68k_trap(!Sf, VECTOR_PRIVILEGE, "setsr")) {
     _m68k_setsr(nv);
   }
 }
 
 /* Dump CPU Vector */
 static void dumpvec(uint32_t base = 0) {
-    const char *vector[] = {
+  const char *vector[] = {
     "sp", "pc", "bus error", "address error",
     "illegal", "div0", "chk", "trapv",
     "priv", "trace", "1010", "1111",
@@ -474,11 +483,6 @@ bool cpu_irq(int n) {
   uint32_t npc = 0;
   uint16_t tsr = cpu_getflags();
   
-  if (sushi) {
-    printf("sushi irq: %d\n", n);
-    //m68k_set_irq(n);
-    return true;
-  }
   ipl = (SR >> 8) & 7;
   if (ipl >= n) {
     return false;
@@ -496,19 +500,19 @@ bool cpu_irq(int n) {
   return true;
 }
 
-bool m68k_trap(bool cond, int n) {
+bool m68k_trap(bool cond, int n, const char *s) {
   uint16_t tsr = cpu_getflags();
 
   if (!cond) {
     return false;
   }
   /* set supervisor mode: PC is saved on Supervisor stack */
-  flogger(0, "TRAP: %x %.8x %.8x\n", n, SPC, PC);
+  flogger(0, "TRAP: %x %.8x %.8x [%s]\n", n, SPC, PC, s);
   _m68k_setsr((tsr & 0x071F) | 0x2000);
 
   // push original pc (or chk==new pc)
-  cpu_push32(SPC);
-  cpu_push16(tsr);
+  ncpu_push32(SPC, "0.spc");
+  ncpu_push16(tsr, "0.tsr");
   PC = cpu_read32(_VBR + (n * 4));
   return true;
 }
@@ -517,14 +521,6 @@ bool m68k_trap(bool cond, int n) {
  * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
  * |           |           |   1  1 |rw|in|  func  |
  * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
- * in = 0: instruction, 1 = not
- * rw = 0:
- *
- *       r.ifff
- * 75 0111.0101
- * 7e 0111.1110
- * 95 1001.0101 clr
- * b5 1011.0101 clr
  */
 static bool m68k_trapa(bool cond, int n, uint32_t addr, int ir, int code, const char *lbl)
 {
@@ -536,26 +532,28 @@ static bool m68k_trapa(bool cond, int n, uint32_t addr, int ir, int code, const 
   /* set supervisor mode: PC is saved on Supervisor stack */
   printf("TRAPA: %x PC:%.8x/%.8x addr:%.8x %.4x %.2x %s\n", n, SPC, PC, addr, ir, code, lbl);
   _m68k_setsr((tsr & 0x071F) | 0x2000);
-  cpu_push32(PC - 2);
-  cpu_push16(tsr);
-  cpu_push16(ir);
-  cpu_push32(addr);
-  cpu_push16((ir & 0xFFE0) + (code & 0x1F));
+  if (n == VECTOR_ADDRESS_ERROR || n == VECTOR_BUS_ERROR)
+    ncpu_push32(PC+eapc, "pc");
+  else
+    ncpu_push32(SPC, "spc");
+  ncpu_push16(tsr, "tsr");
+  ncpu_push16(ir, "ir");
+  ncpu_push32(addr, "addr");
+  ncpu_push16((ir & 0xFFE0) + (code & 0x1F), "code");
   PC = cpu_read32(_VBR + (n * 4));
   return true;
 }
 
 static void m68k_check_address(uint32_t addr, int size, int code, const char *lbl)
 {
-  if ((size == Word && (addr & 1)) ||
-      (size == Long && (addr & 1))) {
+  if ((size != Byte) && (addr & 1)) {
     printf("--- address error: %x\n", addr);
     m68k_trapa(true, VECTOR_ADDRESS_ERROR, addr, IR[0], code, lbl);
     longjmp(trapjmp, 0xdeadbeef);
   }
 }
 
-const uint32_t nmask(int size) {
+constexpr uint32_t nmask(int size) {
   switch (size) {
   case Byte: return 0x80;
   case Word: return 0x8000;
@@ -738,7 +736,8 @@ struct opcode_t {
 static opcode_t *opmap[65536];
 
 /* Let the compiler do the work.... compile time evaluator of opcode bits */
-constexpr opcode_t mkop(const char *bits, const char *eabits, int sz, uint32_t a0, uint32_t a1, const char *mnem, opfn_t fn)
+constexpr opcode_t mkop(const char *bits, const char *eabits, int sz, uint32_t a0, uint32_t a1,
+			const char *mnem, opfn_t fn)
 {
   char ch = 0;
   opcode_t o = { 0 };
@@ -865,40 +864,6 @@ static void m68k_mov(instr_t& i, uint32_t src1, const bool setflag = true)
   i.dstsz = i.size;
 }
 
-// https://edwardhalferty.com/2020/12/16/decoding-the-extended-addressing-modes-of-the-68000/
-uint32_t DnXn(uint32_t base, uint32_t& xn)
-{
-  uint32_t xxx, off = 0;
-
-  // 68000 doesn't use scale
-  // Dxxx.Wss0.oooo.oooo
-  // Dxxx.Wss1.biBB.0III
-  //    b = ignore base
-  //    i = ignore index
-  //   BB = base offset
-  //  III = i/is mode
-  xn = cpu_fetch(Word, "DnXn");
-  xxx = (xn >> 12) & 7;
-
-  // Only support simple mode
-  if (xn & 0x100) {
-    flogger(0, "@ mode:%x bs:%x is:%x bdsz:%x iis:%x\n",
-	   !!(xn & 0x100),
-	   !!(xn & 0x080),
-	   !!(xn & 0x040),
-	   (xn >> 4) & 3,
-	   (xn & 7));
-  }
-
-  // Get Index
-  off = ((xn & 0x8000)? A[xxx] : D[xxx]);
-  if ((xn & 0x0800) == 0) {
-    // word mode
-    off = (int16_t)off;
-  }
-  return base + off + (int8_t)xn;
-}
-
 uint32_t AnX(uint32_t& an, int delta) {
   uint32_t src = an;
 
@@ -907,6 +872,34 @@ uint32_t AnX(uint32_t& an, int delta) {
     return src = an;
   }
   return src;
+}
+
+// https://edwardhalferty.com/2020/12/16/decoding-the-extended-addressing-modes-of-the-68000/
+uint32_t DnXn(uint32_t base, uint32_t& xn, const char *lbl)
+{
+  uint32_t xxx = 0, off = 0;
+
+  // 68000 doesn't use scale
+  // Dxxx.Wss0.oooo.oooo
+  //
+  // Dxxx.Wss1.biBB.0III
+  //    b = ignore base
+  //    i = ignore index
+  //   BB = base offset
+  //  III = i/is mode
+  xn = cpu_fetch(Word, lbl);
+  xxx = (xn >> 12) & 7;
+
+  // Only support simple mode
+  assert((xn & 0x700) == 0);
+
+  // Get Index
+  off = ((xn & 0x8000)? A[xxx] : D[xxx]);
+  if ((xn & 0x0800) == 0) {
+    // word mode
+    off = (int16_t)off;
+  }
+  return base + off + (int8_t)xn;
 }
 
 static uint32_t d16(uint32_t src, uint32_t& xn, const char *s) {
@@ -920,7 +913,7 @@ static uint32_t d16(uint32_t src, uint32_t& xn, const char *s) {
 uint32_t val_t::easrc() {
   uint32_t src = 0;
   uint32_t xn = 0;
-  
+
   int n = (type & 7);
   switch (eamap[type]) {
   case EA_reg_Dn:
@@ -937,13 +930,14 @@ uint32_t val_t::easrc() {
     return AnX(A[n], easz(0x10+n, size));
   case EA_dec_An:
     trace_fmt("-(A%d)", n);
+    eapc += 2;
     return AnX(A[n],-easz(0x10+n, size));
   case EA_d16_An:
     src = d16(A[n], xn, "d16an");
     trace_fmt("0x%X(A%d)", xn, n);
     return src;
   case EA_Xn8_An:
-    src = DnXn(A[n], xn);
+    src = DnXn(A[n], xn, "AnXn");
     trace_fmt("0x%X(A%d,%c%d.%c)",
 	      (xn & 0xFF), n,
 	      (xn & 0x8000) ? 'A' : 'D',
@@ -963,7 +957,7 @@ uint32_t val_t::easrc() {
     trace_fmt("0x%X(PC)", xn);
     return src;
   case EA_Xn8_PC:
-    src = DnXn(PC, xn);
+    src = DnXn(PC, xn, "PCXn");
     trace_fmt("0x%X(A%d,%c%d.%c)",
 	      (xn & 0xFF), n,
 	      (xn & 0x8000) ? 'A' : 'D',
@@ -1195,7 +1189,7 @@ static void m68k_dbcc(instr_t& i, uint32_t Dn, const uint32_t src)
 /* Privileged move Ay,SP or move SP,Ay */
 static void m68k_moveusp(uint32_t& dst, const uint32_t src)
 {
-  if (!m68k_trap(!Sf, VECTOR_PRIVILEGE))
+  if (!m68k_trap(!Sf, VECTOR_PRIVILEGE, "moveusp"))
     dst = src;
 }
 
@@ -1234,13 +1228,13 @@ static void m68k_chk(instr_t& i, int32_t dx, int32_t src)
     Nf = 1;
     // m68test wants original pc?
     SPC=PC;
-    m68k_trap(true, VECTOR_CHK);
+    m68k_trap(true, VECTOR_CHK, "chk.lo");
   }
   else if (dx > src) {
     Nf = 0;
     // m68test wants original pc?
     SPC=PC;
-    m68k_trap(true, VECTOR_CHK);
+    m68k_trap(true, VECTOR_CHK, "chk.hi");
   }
 }
 
@@ -1264,7 +1258,7 @@ static void m68k_muls(instr_t& i, int16_t dx, int16_t src)
 static void m68k_divu(uint32_t& dx, uint32_t src)
 {
   if (src == 0) {
-    m68k_trap(true, VECTOR_DIVIDE_BY_ZERO);
+    m68k_trap(true, VECTOR_DIVIDE_BY_ZERO, "divu0");
   }
   else {
     uint32_t q = dx / src;
@@ -1285,7 +1279,7 @@ static void m68k_divu(uint32_t& dx, uint32_t src)
 static void m68k_divs(uint32_t& dx, int16_t src)
 {
   if (src == 0) {
-    m68k_trap(true, VECTOR_DIVIDE_BY_ZERO);
+    m68k_trap(true, VECTOR_DIVIDE_BY_ZERO,"divs0");
   }
   else if (dx == 0x80000000 && src == -1) {
     nz00(0x1234, Word);
@@ -1357,7 +1351,7 @@ static void m68k_add(instr_t& i, uint32_t src1, uint32_t src2, uint32_t src3, in
     Cf = CFLAG(src1, src2, sum, i.nmask);
     Xf = Cf;
   }
-  // ADDX/SUBX doesn't clear zf once set
+  // ADDX doesn't clear zf once set
   if (setflag == _XNzVC && Zf) {
     Zf = zf;
   }
@@ -1375,7 +1369,7 @@ static void m68k_sub(instr_t& i, uint32_t src1, uint32_t src2, uint32_t src3, in
     Cf = CFLAG_SUB(src1, src2, sum, i.nmask);
     Xf = Cf;
   }
-  // NEGX/SUBX
+  // NEGX/SUBX doesn't clear zf once set
   if (setflag == _XNzVC && Zf) {
     Zf = zf;
   }
@@ -1394,20 +1388,20 @@ static void m68k_cmp(instr_t& i, uint32_t src1, uint32_t src2, int size)
   Cf = CFLAG_SUB(src1, src2, sum, nmask(size));
 }
 
-static void m68k_alu(instr_t& i, int opfn, uint32_t src1, uint32_t src2) {
+static void m68k_and(instr_t& i, uint32_t src1, uint32_t src2) {
   i.rflag = 0x07;
   i.dstsz = i.size;
-  switch (opfn) {
-  case aXOR:
-    i.dstval = src1 ^ src2;
-    break;
-  case aAND:
-    i.dstval = src1 & src2;
-    break;
-  case aOR:
-    i.dstval = src1 | src2;
-    break;
-  }
+  i.dstval = src1 & src2;
+}
+static void m68k_or(instr_t& i, uint32_t src1, uint32_t src2) {
+  i.rflag = 0x07;
+  i.dstsz = i.size;
+  i.dstval = src1 | src2;
+}
+static void m68k_xor(instr_t& i, uint32_t src1, uint32_t src2) {
+  i.rflag = 0x07;
+  i.dstsz = i.size;
+  i.dstval = src1 ^ src2;
 }
 
 /* Swap two registers */
@@ -1531,7 +1525,7 @@ static void m68k_rts() {
 
 static void m68k_rte() {
   /* Privileged instruction */
-  if (m68k_trap(!Sf, VECTOR_PRIVILEGE))
+  if (m68k_trap(!Sf, VECTOR_PRIVILEGE, "rte"))
     return;
   uint16_t tsr = cpu_pop16();
   uint32_t npc = cpu_pop32();
@@ -1551,7 +1545,7 @@ static void m68k_rtr() {
 
 static void m68k_stop(int imm) {
   /* Privileged instruction */
-  if (m68k_trap(!Sf, VECTOR_PRIVILEGE)) {
+  if (m68k_trap(!Sf, VECTOR_PRIVILEGE, "stop")) {
     return;
   }
   if (!stopped) {
@@ -1563,7 +1557,7 @@ static void m68k_stop(int imm) {
 
 static void m68k_reset() {
   /* Privileged instruction */
-  if (m68k_trap(!Sf, VECTOR_PRIVILEGE))
+  if (m68k_trap(!Sf, VECTOR_PRIVILEGE, "reset"))
     return;
   /* Not a real reset */
   printf("reset:%.8x\n", SPC);
@@ -1790,8 +1784,8 @@ int decode_68k(const uint16_t op)
 {
   opcode_t *opc;
   uint32_t sj;
-  uint32_t 
-
+    
+  eapc = 0;
   ir = 0;
   IR[ir++] = op;
   for (int i = 0; i < 16; i++)
@@ -1827,175 +1821,174 @@ int decode_68k(const uint16_t op)
   printf("missing: %.8x %.4x\n", SPC, op);
 
   /* Execute Illegal Instruction opcode */
-  m68k_trap(true, VECTOR_ILLEGAL_INSTRUCTION);
+  m68k_trap(true, VECTOR_ILLEGAL_INSTRUCTION, "ill");
   return 0;
 }
 
 /* Create opcode table then opmap for all decode options */
 #define fnarg instr_t& i
-
-#define o(bits, eabits, flags, rwarg, size, arg, a1, mnem, fn) mkop(bits, eabits, size, arg, 0, mnem, [](fnarg) fn)
+#define o(bits, eabits, flags, size, a0, a1, mnem, fn) mkop(bits, eabits, size, a0, a1, mnem, [](fnarg) fn)
 
 opcode_t optab[] = {
-  o("0000.000.000.111.100", "___________x", "______", "pNNpp-------", Byte, Imm_SR,   SR,   "or.b    %i, CCR",       { m68k_setsr(cpu_getflags() | IMM, Byte); }),
-  o("0000.000.001.111.100", "___________x", "S_____", "pNNpp-------", Word, Imm_SR,   SR,   "or.w    %i, SR",        { m68k_setsr(cpu_getflags() | IMM, Word); }),
-  o("0000.000.0ss.mmm.yyy", "1_1111111___", "__NZ00", "------------", Any,  Imm_EA,   EA,   "or%s    %i, %ea",       { m68k_alu(i, aOR, SRC, IMM); }),
-  o("0000.001.000.111.100", "___________x", "______", "pNNpp-------", Byte, Imm_SR,   SR,   "and.b   %i, CCR",       { m68k_setsr(cpu_getflags() & IMM, Byte); }),
-  o("0000.001.001.111.100", "___________x", "S_____", "pNNpp-------", Word, Imm_SR,   SR,   "and.w   %i, SR",        { m68k_setsr(cpu_getflags() & IMM, Word); }),
-  o("0000.001.0ss.mmm.yyy", "1_1111111___", "__NZ00", "------------", Any,  Imm_EA,   EA,   "and%s   %i, %ea",       { m68k_alu(i, aAND, SRC, IMM); }), // gand
-  o("0000.010.0ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  Imm_EA,   EA,   "sub%s   %i, %ea",       { m68k_sub(i, SRC, IMM, 0, _XNZVC); }), // gsub
-  o("0000.011.0ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  Imm_EA,   EA,   "add%s   %i, %ea",       { m68k_add(i, SRC, IMM, 0, _XNZVC); }), // gadd
-  o("0000.101.000.111.100", "___________x", "______", "pNNpp-------", Byte, Imm_SR,   SR,   "eor.b   %i, CCR",       { m68k_setsr(cpu_getflags() ^ IMM, Byte); }),
-  o("0000.101.001.111.100", "___________x", "S_____", "pNNpp-------", Word, Imm_SR,   SR,   "eor.w   %i, SR",        { m68k_setsr(cpu_getflags() ^ IMM, Word); }),
-  o("0000.101.0ss.mmm.yyy", "1_1111111___", "__NZ00", "------------", Any,  Imm_EA,   EA,   "eor%s   %i, %ea",       { m68k_alu(i, aXOR, SRC, IMM); }), // gxor
-  o("0000.110.0ss.mmm.yyy", "1_1111111___", "__NZVC", "------------", Any,  Imm_EA,   EA,   "cmp%s   %i, %ea",       { m68k_cmp(i,  SRC, IMM, i.size); }),
-  o("0000.100.000.mmm.yyy", "1_111111111_", "___Z__", "------------", Byte, Imm_EA,   EA,   "btst    %i, %ea",       { m68k_btst(i, SRC, IMM); }),
-  o("0000.100.001.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Imm_EA,   EA,   "bchg    %i, %ea",       { m68k_bchg(i, SRC, IMM); }),
-  o("0000.100.010.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Imm_EA,   EA,   "bclr    %i, %ea",       { m68k_bclr(i, SRC, IMM); }),
-  o("0000.100.011.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Imm_EA,   EA,   "bset    %i, %ea",       { m68k_bset(i, SRC, IMM); }),
-  o("0000.ddd.100.mmm.yyy", "1_1111111111", "___Z__", "------------", Byte, Dx_EA,    EA,   "btst    D%x, %ea",      { m68k_btst(i, SRC, Dx); }),
-  o("0000.ddd.101.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Dx_EA,    EA,   "bchg    D%x, %ea",      { m68k_bchg(i, SRC, Dx); }),
-  o("0000.ddd.110.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Dx_EA,    EA,   "bclr    D%x, %ea",      { m68k_bclr(i, SRC, Dx); }),
-  o("0000.ddd.111.mmm.yyy", "1_1111111___", "___Z__", "------------", Byte, Dx_EA,    EA,   "bset    D%x, %ea",      { m68k_bset(i, SRC, Dx); }),
-  o("0000.ddd.100.001.aaa", "_x__________", "______", "------------", Word, Ay16_Dx,  Dx,   "movep.w %ea, D%x",      { m68k_movep<0>(i, Dx, "memreg.w"); }),
-  o("0000.ddd.101.001.aaa", "_x__________", "______", "------------", Long, Ay16_Dx,  Dx,   "movep.l %ea, D%x",      { m68k_movep<1>(i, Dx, "memreg.l"); }),
-  o("0000.ddd.110.001.aaa", "_x__________", "______", "------------", Word, Ay16_Dx,  Dx,   "movep.w D%x, %ea",      { m68k_movep<2>(i, Dx, "regmem.w"); }),
-  o("0000.ddd.111.001.aaa", "_x__________", "______", "------------", Long, Ay16_Dx,  Dx,   "movep.l D%x, %ea",      { m68k_movep<3>(i, Dx, "regmem.l"); }),
+  o("0000.000.000.111.100", "___________x", "______", Byte, Imm_SR,   SR,   "or.b    %i, CCR",       { m68k_setsr(cpu_getflags() | IMM, Byte); }),
+  o("0000.000.001.111.100", "___________x", "S_____", Word, Imm_SR,   SR,   "or.w    %i, SR",        { m68k_setsr(cpu_getflags() | IMM, Word); }),
+  o("0000.000.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "or%s    %i, %ea",       { m68k_or(i, SRC, IMM); }),
+  o("0000.001.000.111.100", "___________x", "______", Byte, Imm_SR,   SR,   "and.b   %i, CCR",       { m68k_setsr(cpu_getflags() & IMM, Byte); }),
+  o("0000.001.001.111.100", "___________x", "S_____", Word, Imm_SR,   SR,   "and.w   %i, SR",        { m68k_setsr(cpu_getflags() & IMM, Word); }),
+  o("0000.001.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "and%s   %i, %ea",       { m68k_and(i, SRC, IMM); }), // gand
+  o("0000.010.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  Imm_EA,   EA,   "sub%s   %i, %ea",       { m68k_sub(i, SRC, IMM, 0, _XNZVC); }), // gsub
+  o("0000.011.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  Imm_EA,   EA,   "add%s   %i, %ea",       { m68k_add(i, SRC, IMM, 0, _XNZVC); }), // gadd
+  o("0000.101.000.111.100", "___________x", "______", Byte, Imm_SR,   SR,   "eor.b   %i, CCR",       { m68k_setsr(cpu_getflags() ^ IMM, Byte); }),
+  o("0000.101.001.111.100", "___________x", "S_____", Word, Imm_SR,   SR,   "eor.w   %i, SR",        { m68k_setsr(cpu_getflags() ^ IMM, Word); }),
+  o("0000.101.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "eor%s   %i, %ea",       { m68k_xor(i, SRC, IMM); }), // gxor
+  o("0000.110.0ss.mmm.yyy", "1_1111111___", "__NZVC", Any,  Imm_EA,   EA,   "cmp%s   %i, %ea",       { m68k_cmp(i,  SRC, IMM, i.size); }),
+  o("0000.100.000.mmm.yyy", "1_111111111_", "___Z__", Byte, Imm_EA,   EA,   "btst    %i, %ea",       { m68k_btst(i, SRC, IMM); }),
+  o("0000.100.001.mmm.yyy", "1_1111111___", "___Z__", Byte, Imm_EA,   EA,   "bchg    %i, %ea",       { m68k_bchg(i, SRC, IMM); }),
+  o("0000.100.010.mmm.yyy", "1_1111111___", "___Z__", Byte, Imm_EA,   EA,   "bclr    %i, %ea",       { m68k_bclr(i, SRC, IMM); }),
+  o("0000.100.011.mmm.yyy", "1_1111111___", "___Z__", Byte, Imm_EA,   EA,   "bset    %i, %ea",       { m68k_bset(i, SRC, IMM); }),
+  o("0000.ddd.100.mmm.yyy", "1_1111111111", "___Z__", Byte, Dx_EA,    EA,   "btst    D%x, %ea",      { m68k_btst(i, SRC, Dx); }),
+  o("0000.ddd.101.mmm.yyy", "1_1111111___", "___Z__", Byte, Dx_EA,    EA,   "bchg    D%x, %ea",      { m68k_bchg(i, SRC, Dx); }),
+  o("0000.ddd.110.mmm.yyy", "1_1111111___", "___Z__", Byte, Dx_EA,    EA,   "bclr    D%x, %ea",      { m68k_bclr(i, SRC, Dx); }),
+  o("0000.ddd.111.mmm.yyy", "1_1111111___", "___Z__", Byte, Dx_EA,    EA,   "bset    D%x, %ea",      { m68k_bset(i, SRC, Dx); }),
+  o("0000.ddd.100.001.aaa", "_x__________", "______", Word, Ay16_Dx,  rDx,  "movep.w %ea, D%x",      { m68k_movep<0>(i, Dx, "memreg.w"); }),
+  o("0000.ddd.101.001.aaa", "_x__________", "______", Long, Ay16_Dx,  rDx,  "movep.l %ea, D%x",      { m68k_movep<1>(i, Dx, "memreg.l"); }),
+  o("0000.ddd.110.001.aaa", "_x__________", "______", Word, Ay16_Dx,  rDx,  "movep.w D%x, %ea",      { m68k_movep<2>(i, Dx, "regmem.w"); }),
+  o("0000.ddd.111.001.aaa", "_x__________", "______", Long, Ay16_Dx,  rDx,  "movep.l D%x, %ea",      { m68k_movep<3>(i, Dx, "regmem.l"); }),
 
-  o("0010.aaa.001.mmm.yyy", "111111111111", "______", "------------", Long, EA_Ax,    Ax,   "movea.l %ea, A%x",      { m68k_mov<uint32_t>(i, SRC, false); }),
-  o("0011.aaa.001.mmm.yyy", "111111111111", "______", "------------", Word, EA_Ax,    Ax,   "movea.w %ea, A%x",      { m68k_mov<int16_t>(i,  SRC, false); }),
-  o("0001.xxx.MMM.mmm.yyy", "3_3333333111", "__NZ00", "------------", Byte, EA_EA2,   EA2,  "move.b  %ea, %dst",     { m68k_mov<uint8_t>(i, SRC); }),
-  o("0010.xxx.MMM.mmm.yyy", "313333333111", "__NZ00", "------------", Long, EA_EA2,   EA2,  "move.l  %ea, %dst",     { m68k_mov<uint32_t>(i, SRC); }),
-  o("0011.xxx.MMM.mmm.yyy", "313333333111", "__NZ00", "------------", Word, EA_EA2,   EA2,  "move.w  %ea, %dst",     { m68k_mov<uint16_t>(i, SRC); }),
+  o("0010.aaa.001.mmm.yyy", "111111111111", "______", Long, EA_Ax,    rAx,  "movea.l %ea, A%x",      { m68k_mov<uint32_t>(i, SRC, false); }),
+  o("0011.aaa.001.mmm.yyy", "111111111111", "______", Word, EA_Ax,    rAx,  "movea.w %ea, A%x",      { m68k_mov<int16_t>(i,  SRC, false); }),
+  o("0001.xxx.MMM.mmm.yyy", "3_3333333111", "__NZ00", Byte, EA_EA2,   EA2,  "move.b  %ea, %dst",     { m68k_mov<uint8_t>(i, SRC); }),
+  o("0010.xxx.MMM.mmm.yyy", "313333333111", "__NZ00", Long, EA_EA2,   EA2,  "move.l  %ea, %dst",     { m68k_mov<uint32_t>(i, SRC); }),
+  o("0011.xxx.MMM.mmm.yyy", "313333333111", "__NZ00", Word, EA_EA2,   EA2,  "move.w  %ea, %dst",     { m68k_mov<uint16_t>(i, SRC); }),
 
-  o("0100.000.011.mmm.yyy", "1_1111111___", "______", "------------", Word, SR_EA,    EA,   "move.w  SR, %ea",       { m68k_mov<uint32_t>(i, cpu_getflags(), false); }),
-  o("0100.010.011.mmm.yyy", "1_1111111111", "______", "E.NNp-------", Word, EA_SR,    SR,   "move.b  %ea, CCR",      { m68k_setsr(SRC, Byte); }),
-  o("0100.011.011.mmm.yyy", "1_1111111111", "S_____", "E.NNp-------", Word, EA_SR,    SR,   "move.w  %ea, SR",       { m68k_setsr(SRC, Word); }),
-  o("0100.000.0ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  EA,       None, "negx%s  %ea",           { m68k_sub(i, 0, SRC, Xf, _XNzVC); }),
-  o("0100.001.0ss.mmm.yyy", "1_1111111___", "__0100", "------------", Any,  EA,       None, "clr%s   %ea",           { m68k_mov<uint32_t>(i, 0); }),
-  o("0100.010.0ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  EA,       None, "neg%s   %ea",           { m68k_sub(i, 0, SRC, 0, _XNZVC); }),
-  o("0100.011.0ss.mmm.yyy", "1_1111111___", "__NZ00", "------------", Any,  EA,       None, "not%s   %ea",           { m68k_mov<uint32_t>(i, ~SRC); }),
-  o("0100.100.010.000.ddd", "x___________", "__NZ00", "p-----------", Word, rDy,      None, "ext.w   D%y",           { m68k_mov<int8_t>(i, Dy); }),
-  o("0100.100.011.000.ddd", "x___________", "__NZ00", "p-----------", Long, rDy,      None, "ext.l   D%y",           { m68k_mov<int16_t>(i, Dy); }),
-  o("0100.100.000.mmm.yyy", "1_1111111___", "_X?z?C", "------------", Byte, EA,       None, "nbcd    %ea",           { m68k_sbcd(i, 0, SRC, Xf); }),
-  o("0100.100.001.000.ddd", "x___________", "__NZ00", "p-----------", Word, rDy,      None, "swap    D%y",           { m68k_swap(Dy); }),
-  o("0100.100.001.mmm.yyy", "__1__111111_", "S_____", "------------", Long, EA,       None, "pea     %ea",           { m68k_pea(SRCADDR); }),
-  o("0100.101.011.111.100", "___________x", "______", "------------", None, None,     None, "illegal",               { m68k_trap(true, VECTOR_ILLEGAL_INSTRUCTION); }),
-  o("0100.101.011.mmm.yyy", "1_1111111___", "__NZ00", "------------", Byte, EA,       None, "tas     %ea",           { m68k_tas(i, SRC); }),
-  o("0100.101.0ss.mmm.yyy", "1_111111111_", "__NZ00", "E.p---------", Any,  EA,       None, "tst%s   $%ea",          { m68k_cmp(i, SRC, 0, i.size); }),
-  o("0100.111.001.00v.vvv", "xx__________", "______", "------------", None, Imm4,     None, "trap    %i",            { m68k_trap(true, 32 + IMM); }),
-  o("0100.111.001.010.aaa", "__x_________", "______", "------------", Word, Imm_Ay,   None, "link    A%y, %i",       { m68k_link(Ay, IMM); }),
-  o("0100.111.001.011.aaa", "___x________", "______", "ppp---------", None, rAy,      None, "unlk    A%y",           { m68k_unlink(Ay); }),
-  o("0100.111.001.100.aaa", "____x_______", "S_____", "p-----------", Long, rAy,      None, "move    A%y, USP",      { m68k_moveusp(USP, Ay); }),
-  o("0100.111.001.101.aaa", "_____x______", "S_____", "p-----------", Long, rAy,      None, "move    USP, A%y",      { m68k_moveusp(Ay, USP); }),
-  o("0100.111.001.110.000", "______x_____", "S_____", "------------", None, None,     None, "reset",                 { m68k_reset(); }),
-  o("0100.111.001.110.001", "______x_____", "______", "p-----------", None, None,     None, "nop",                   { m68k_nop(); }),
-  o("0100.111.001.110.010", "______x_____", "SXNZVC", "nn----------", Word, Imm,      None, "stop",                  { m68k_stop(IMM); }),
-  o("0100.111.001.110.011", "______x_____", "S_____", "uuupp-------", None, None,     None, "rte",                   { m68k_rte(); }),
-  o("0100.111.001.110.101", "______x_____", "______", "uupp--------", None, None,     None, "rts",                   { m68k_rts(); }),
-  o("0100.111.001.110.110", "______x_____", "______", "------------", None, None,     None, "trapv",                 { m68k_trap(Vf, VECTOR_TRAPV); }),
-  o("0100.111.001.110.111", "______x_____", "_XNZVC", "------------", None, None,     None, "rtr",                   { m68k_rtr(); }),
-  o("0100.111.010.mmm.yyy", "__1__111111_", "______", "------------", Long, EA,       None, "jsr     %ea %f",        { m68k_setpc(SRCADDR, true, "JSR"); }),
-  o("0100.111.011.mmm.yyy", "__1__111111_", "______", "------------", Long, EA,       None, "jmp     %ea",           { m68k_setpc(SRCADDR, false, "JMP"); }),
-  o("0100.100.010.mmm.yyy", "__1_11111___", "______", "------------", Word, Iw_EA,    EA,   "movem%s %m, %ea",       { m68k_movem<0>(i, IMM, "regmem.w"); }),
-  o("0100.100.011.mmm.yyy", "__1_11111___", "______", "------------", Long, Iw_EA,    EA,   "movem%s %m, %ea",       { m68k_movem<1>(i, IMM, "regmem.l"); }),
-  o("0100.110.010.mmm.yyy", "__11_111111_", "______", "------------", Word, Iw_EA,    EA,   "movem%s %ea, %m",       { m68k_movem<2>(i, IMM, "memreg.w"); }),
-  o("0100.110.011.mmm.yyy", "__11_111111_", "______", "------------", Long, Iw_EA,    EA,   "movem%s %ea, %m",       { m68k_movem<3>(i, IMM, "memreg.l"); }),
-  o("0100.aaa.111.mmm.yyy", "__1__111111_", "______", "------------", Long, EA_Ax,    None, "lea     %ea, A%x",      { m68k_lea(i, Ax, SRCADDR); }),
-  o("0100.ddd.110.mmm.yyy", "1_1111111111", "__N???", "------------", Word, EA_Dx,    None, "chk     D%x, %ea",      { m68k_chk(i, Dx, SRC); }),
+  o("0100.000.011.mmm.yyy", "1_1111111___", "______", Word, SR_EA,    EA,   "move.w  SR, %ea",       { m68k_mov<uint32_t>(i, cpu_getflags(), false); }),
+  o("0100.010.011.mmm.yyy", "1_1111111111", "______", Word, EA_SR,    SR,   "move.b  %ea, CCR",      { m68k_setsr(SRC, Byte); }),
+  o("0100.011.011.mmm.yyy", "1_1111111111", "S_____", Word, EA_SR,    SR,   "move.w  %ea, SR",       { m68k_setsr(SRC, Word); }),
+  o("0100.000.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  EA,       EA,   "negx%s  %ea",           { m68k_sub(i, 0, SRC, Xf, _XNzVC); }),
+  o("0100.001.0ss.mmm.yyy", "1_1111111___", "__0100", Any,  EA,       EA,   "clr%s   %ea",           { m68k_mov<uint32_t>(i, 0); }),
+  o("0100.010.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  EA,       EA,   "neg%s   %ea",           { m68k_sub(i, 0, SRC, 0, _XNZVC); }),
+  o("0100.011.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  EA,       EA,   "not%s   %ea",           { m68k_mov<uint32_t>(i, ~SRC); }),
+  o("0100.100.010.000.ddd", "x___________", "__NZ00", Word, rDy,      rDy,  "ext.w   D%y",           { m68k_mov<int8_t>(i, Dy); }),
+  o("0100.100.011.000.ddd", "x___________", "__NZ00", Long, rDy,      rDy,  "ext.l   D%y",           { m68k_mov<int16_t>(i, Dy); }),
+  o("0100.100.000.mmm.yyy", "1_1111111___", "_X?z?C", Byte, EA,       EA,   "nbcd    %ea",           { m68k_sbcd(i, 0, SRC, Xf); }),
+  o("0100.100.001.000.ddd", "x___________", "__NZ00", Word, rDy,      rDy,  "swap    D%y",           { m68k_swap(Dy); }),
+  o("0100.100.001.mmm.yyy", "__1__111111_", "S_____", Long, EA,       EA,   "pea     %ea",           { m68k_pea(SRCADDR); }),
+  o("0100.101.011.111.100", "___________x", "______", None, None,     None, "illegal",               { m68k_trap(true, VECTOR_ILLEGAL_INSTRUCTION); }),
+  o("0100.101.011.mmm.yyy", "1_1111111___", "__NZ00", Byte, EA,       EA,   "tas     %ea",           { m68k_tas(i, SRC); }),
+  o("0100.101.0ss.mmm.yyy", "1_111111111_", "__NZ00", Any,  EA,       EA,   "tst%s   $%ea",          { m68k_cmp(i, SRC, 0, i.size); }),
+  o("0100.111.001.00v.vvv", "xx__________", "______", None, Imm4,     None, "trap    %i",            { m68k_trap(true, 32 + IMM); }),
+  o("0100.111.001.010.aaa", "__x_________", "______", Word, Imm_Ay,   rAy,  "link    A%y, %i",       { m68k_link(Ay, IMM); }),
+  o("0100.111.001.011.aaa", "___x________", "______", None, rAy,      rAy,  "unlk    A%y",           { m68k_unlink(Ay); }),
+  o("0100.111.001.100.aaa", "____x_______", "S_____", Long, rAy,      rUSP, "move    A%y, USP",      { m68k_moveusp(USP, Ay); }),
+  o("0100.111.001.101.aaa", "_____x______", "S_____", Long, rUSP,     rAy,  "move    USP, A%y",      { m68k_moveusp(Ay, USP); }),
+  o("0100.111.001.110.000", "______x_____", "S_____", None, None,     None, "reset",                 { m68k_reset(); }),
+  o("0100.111.001.110.001", "______x_____", "______", None, None,     None, "nop",                   { m68k_nop(); }),
+  o("0100.111.001.110.010", "______x_____", "SXNZVC", Word, Imm,      None, "stop",                  { m68k_stop(IMM); }),
+  o("0100.111.001.110.011", "______x_____", "S_____", None, None,     None, "rte",                   { m68k_rte(); }),
+  o("0100.111.001.110.101", "______x_____", "______", None, None,     None, "rts",                   { m68k_rts(); }),
+  o("0100.111.001.110.110", "______x_____", "______", None, None,     None, "trapv",                 { m68k_trap(Vf, VECTOR_TRAPV); }),
+  o("0100.111.001.110.111", "______x_____", "_XNZVC", None, None,     None, "rtr",                   { m68k_rtr(); }),
+  o("0100.111.010.mmm.yyy", "__1__111111_", "______", Long, EA,       None, "jsr     %ea %f",        { m68k_setpc(SRCADDR, true, "JSR"); }),
+  o("0100.111.011.mmm.yyy", "__1__111111_", "______", Long, EA,       None, "jmp     %ea",           { m68k_setpc(SRCADDR, false, "JMP"); }),
+  o("0100.100.010.mmm.yyy", "__1_11111___", "______", Word, Iw_EA,    EA,   "movem%s %m, %ea",       { m68k_movem<0>(i, IMM, "regmem.w"); }),
+  o("0100.100.011.mmm.yyy", "__1_11111___", "______", Long, Iw_EA,    EA,   "movem%s %m, %ea",       { m68k_movem<1>(i, IMM, "regmem.l"); }),
+  o("0100.110.010.mmm.yyy", "__11_111111_", "______", Word, Iw_EA,    EA,   "movem%s %ea, %m",       { m68k_movem<2>(i, IMM, "memreg.w"); }),
+  o("0100.110.011.mmm.yyy", "__11_111111_", "______", Long, Iw_EA,    EA,   "movem%s %ea, %m",       { m68k_movem<3>(i, IMM, "memreg.l"); }),
+  o("0100.aaa.111.mmm.yyy", "__1__111111_", "______", Long, EA_Ax,    rAx,  "lea     %ea, A%x",      { m68k_lea(i, Ax, SRCADDR); }),
+  o("0100.ddd.110.mmm.yyy", "1_1111111111", "__N???", Word, EA_Dx,    EA,   "chk     D%x, %ea",      { m68k_chk(i, Dx, SRC); }),
 
-  o("0101.ccc.c11.001.ddd", "_x__________", "______", "------------", Word, PC16_Dy,  None, "db%cc   D%y, %i",       { m68k_dbcc(i, Dy, IMM); }),
-  o("0101.ccc.c11.mmm.yyy", "1_1111111___", "______", "------------", Byte, EA,       None, "s%cc    %ea",           { m68k_scc(i); }),
-  o("0101.qqq.0ss.mmm.yyy", "_1__________", "______", "------------", Any,  q3_EA,    None, "addq%s  %i, %ea",       { m68k_add(i, SRC, IMM, 0, NOSET); }), // gadd
-  o("0101.qqq.0ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  q3_EA,    None, "addq%s  %i, %ea",       { m68k_add(i, SRC, IMM, 0, _XNZVC); }), // gadd
-  o("0101.qqq.1ss.mmm.yyy", "_1__________", "______", "------------", Any,  q3_EA,    None, "subq%s  %i, %ea",       { m68k_sub(i, SRC, IMM, 0, NOSET); }), // gsub
-  o("0101.qqq.1ss.mmm.yyy", "1_1111111___", "_XNZVC", "------------", Any,  q3_EA,    None, "subq%s  %i, %ea",       { m68k_sub(i, SRC, IMM, 0, _XNZVC); }), // gsub
+  o("0101.ccc.c11.001.ddd", "_x__________", "______", Word, PC16_Dy,  rDy,  "db%cc   D%y, %i",       { m68k_dbcc(i, Dy, IMM); }),
+  o("0101.ccc.c11.mmm.yyy", "1_1111111___", "______", Byte, EA,       None, "s%cc    %ea",           { m68k_scc(i); }),
+  o("0101.qqq.0ss.mmm.yyy", "_1__________", "______", Any,  q3_EA,    EA,   "addq%s  %i, %ea",       { m68k_add(i, SRC, IMM, 0, NOSET); }), // gadd
+  o("0101.qqq.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  q3_EA,    EA,   "addq%s  %i, %ea",       { m68k_add(i, SRC, IMM, 0, _XNZVC); }), // gadd
+  o("0101.qqq.1ss.mmm.yyy", "_1__________", "______", Any,  q3_EA,    EA,   "subq%s  %i, %ea",       { m68k_sub(i, SRC, IMM, 0, NOSET); }), // gsub
+  o("0101.qqq.1ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  q3_EA,    EA,   "subq%s  %i, %ea",       { m68k_sub(i, SRC, IMM, 0, _XNZVC); }), // gsub
 
-  o("0110.ccc.cnn.nnn.nnn", "____________", "______", "------------", Long, Branch,   None, "b%cc    %i %f",         { m68k_bcc(i.op, IMM); }),
-  o("0111.ddd.0qq.qqq.qqq", "____________", "__NZ00", "------------", Long, q8_Dx,    None, "moveq   %i, D%x",       { m68k_mov<uint32_t>(i, IMM); }),
+  o("0110.ccc.cnn.nnn.nnn", "____________", "______", Long, Branch,   None, "b%cc    %i %f",         { m68k_bcc(i.op, IMM); }),
+  o("0111.ddd.0qq.qqq.qqq", "____________", "__NZ00", Long, q8_Dx,    rDx,  "moveq   %i, D%x",       { m68k_mov<uint32_t>(i, IMM); }),
 
-  o("1000.ddd.0ss.mmm.yyy", "1_1111111111", "__NZ00", "------------", Any,  EA_Dx,    None, "or%s    %ea, D%x",      { m68k_alu(i, aOR, SRC, Dx); }),
-  o("1000.ddd.1ss.mmm.yyy", "__1111111___", "__NZ00", "------------", Any,  Dx_EA,    None, "or%s    D%x, %ea",      { m68k_alu(i, aOR, Dx, SRC); }),
-  o("1000.ddd.011.mmm.yyy", "1_1111111111", "__NZV0", "------------", Word, EA_Dx,    None, "divu    %ea, D%x",      { m68k_divu(Dx, SRC); }),
-  o("1000.ddd.111.mmm.yyy", "1_1111111111", "__NZV0", "------------", Word, EA_Dx,    None, "divs    %ea, D%x",      { m68k_divs(Dx, SRC); }),
-  o("1000.ddd.100.000.ddd", "x___________", "_X?z?C", "------------", Byte, Dy_Dx,    None, "sbcd    D%y, D%x",      { m68k_sbcd(i, Dx, Dy, Xf); }),
-  o("1000.xxx.100.001.yyy", "_x__________", "_X?z?C", "------------", Byte, dAyx,     None, "sbcd    -(A%y),-(A%x)", { m68k_sbcd(i, DST, SRC, Xf); }),
+  o("1000.ddd.0ss.mmm.yyy", "1_1111111111", "__NZ00", Any,  EA_Dx,    rDx,  "or%s    %ea, D%x",      { m68k_or(i, SRC, Dx); }),
+  o("1000.ddd.1ss.mmm.yyy", "__1111111___", "__NZ00", Any,  Dx_EA,    EA,   "or%s    D%x, %ea",      { m68k_or(i, Dx, SRC); }),
+  o("1000.ddd.011.mmm.yyy", "1_1111111111", "__NZV0", Word, EA_Dx,    rDx, "divu    %ea, D%x",      { m68k_divu(Dx, SRC); }),
+  o("1000.ddd.111.mmm.yyy", "1_1111111111", "__NZV0", Word, EA_Dx,    rDx, "divs    %ea, D%x",      { m68k_divs(Dx, SRC); }),
+  o("1000.ddd.100.000.ddd", "x___________", "_X?z?C", Byte, Dy_Dx,    rDx, "sbcd    D%y, D%x",      { m68k_sbcd(i, Dx, Dy, Xf); }),
+  o("1000.xxx.100.001.yyy", "_x__________", "_X?z?C", Byte, dAyx,     dAx, "sbcd    -(A%y),-(A%x)", { m68k_sbcd(i, DST, SRC, Xf); }),
 
-  o("1001.aaa.011.mmm.yyy", "111111111111", "______", "------------", Word, EA_Ax,    None, "suba.w  %ea, A%x",      { setval(Ax, Ax - (int16_t)SRC, Long); }),
-  o("1001.aaa.111.mmm.yyy", "111111111111", "______", "------------", Long, EA_Ax,    None, "suba.l  %ea, A%x",      { m68k_sub(i, Ax,  SRC, 0, NOSET); }),  // gsub
-  o("1001.ddd.0ss.mmm.yyy", "111111111111", "_XNZVC", "------------", Any,  EA_Dx,    None, "sub%s   %ea, D%x",      { m68k_sub(i, Dx,  SRC, 0, _XNZVC); }), // gsub ->
-  o("1001.ddd.1ss.mmm.yyy", "s_1111111___", "_XNZVC", "------------", Any,  Dx_EA,    None, "sub%s   D%x, %ea",      { m68k_sub(i, SRC, Dx,  0, _XNZVC); }), // gsub <-
-  o("1001.ddd.1ss.000.ddd", "x___________", "_XNzVC", "------------", Any,  Dy_Dx,    None, "subx%s  D%y, D%x",      { m68k_sub(i, Dx,  Dy,  Xf, _XNzVC); }), // gsub
-  o("1001.xxx.1ss.001.yyy", "_x__________", "_XNzVC", "------------", Any,  dAyx,     None, "subx%s  -(A%y),-(A%x)", { m68k_sub(i, DST, SRC, Xf, _XNzVC); }), // gsub
+  o("1001.aaa.011.mmm.yyy", "111111111111", "______", Word, EA_Ax,    rAx,  "suba.w  %ea, A%x",      { setval(Ax, Ax - (int16_t)SRC, Long); }),
+  o("1001.aaa.111.mmm.yyy", "111111111111", "______", Long, EA_Ax,    rAx,  "suba.l  %ea, A%x",      { m68k_sub(i, Ax,  SRC, 0, NOSET); }),  // gsub
+  o("1001.ddd.0ss.mmm.yyy", "111111111111", "_XNZVC", Any,  EA_Dx,    rDx,  "sub%s   %ea, D%x",      { m68k_sub(i, Dx,  SRC, 0, _XNZVC); }), // gsub ->
+  o("1001.ddd.1ss.mmm.yyy", "s_1111111___", "_XNZVC", Any,  Dx_EA,    EA,   "sub%s   D%x, %ea",      { m68k_sub(i, SRC, Dx,  0, _XNZVC); }), // gsub <-
+  o("1001.ddd.1ss.000.ddd", "x___________", "_XNzVC", Any,  Dy_Dx,    rDx,  "subx%s  D%y, D%x",      { m68k_sub(i, Dx,  Dy,  Xf, _XNzVC); }), // gsub
+  o("1001.xxx.1ss.001.yyy", "_x__________", "_XNzVC", Any,  dAyx,     dAx,  "subx%s  -(A%y),-(A%x)", { m68k_sub(i, DST, SRC, Xf, _XNzVC); }), // gsub
 
-  o("1011.aaa.011.mmm.yyy", "111111111111", "__NZVC", "------------", Word, EA_Ax,    None, "cmpa.w  %ea, A%x",      { m68k_cmp(i, Ax, (int16_t)SRC, Long); }),
-  o("1011.aaa.111.mmm.yyy", "111111111111", "__NZVC", "------------", Long, EA_Ax,    None, "cmpa.l  %ea, A%x",      { m68k_cmp(i, Ax, SRC, i.size); }),
-  o("1011.ddd.0ss.mmm.yyy", "111111111111", "__NZVC", "------------", Any,  EA_Dx,    None, "cmp%s   %ea, D%x",      { m68k_cmp(i, Dx, SRC, i.size); }),
-  o("1011.xxx.1ss.001.yyy", "_x__________", "__NZVC", "------------", Any,  iAyx,     None, "cmpm%s  (A%y)+,(A%x)+", { m68k_cmp(i, DST, SRC, i.size); }),
-  o("1011.ddd.1ss.mmm.yyy", "1_1111111___", "__NZ00", "------------", Any,  Dx_EA,    None, "eor%s   D%x, %ea",      { m68k_alu(i, aXOR, SRC, Dx); }),
+  o("1011.aaa.011.mmm.yyy", "111111111111", "__NZVC", Word, EA_Ax,    rAx,  "cmpa.w  %ea, A%x",      { m68k_cmp(i, Ax, (int16_t)SRC, Long); }),
+  o("1011.aaa.111.mmm.yyy", "111111111111", "__NZVC", Long, EA_Ax,    rAx,  "cmpa.l  %ea, A%x",      { m68k_cmp(i, Ax, SRC, i.size); }),
+  o("1011.ddd.0ss.mmm.yyy", "111111111111", "__NZVC", Any,  EA_Dx,    rDx,  "cmp%s   %ea, D%x",      { m68k_cmp(i, Dx, SRC, i.size); }),
+  o("1011.xxx.1ss.001.yyy", "_x__________", "__NZVC", Any,  iAyx,     iAx,  "cmpm%s  (A%y)+,(A%x)+", { m68k_cmp(i, DST, SRC, i.size); }),
+  o("1011.ddd.1ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Dx_EA,    EA,   "eor%s   D%x, %ea",      { m68k_xor(i, SRC, Dx); }),
 
-  o("1100.ddd.0ss.mmm.yyy", "1_1111111111", "__NZ00", "------------", Any,  EA_Dx,    None, "and%s   %ea, D%x",      { m68k_alu(i, aAND, SRC, Dx); }),
-  o("1100.ddd.1ss.mmm.yyy", "s_1111111___", "__NZ00", "------------", Any,  Dx_EA,    None, "and%s   D%x, %ea",      { m68k_alu(i, aAND, Dx, SRC); }),
-  o("1100.ddd.011.mmm.yyy", "1_1111111111", "__NZV0", "------------", Word, EA_Dx,    None, "mulu    %ea, D%x",      { m68k_mulu(i, Dx, SRC); }),
-  o("1100.ddd.111.mmm.yyy", "1_1111111111", "__NZV0", "------------", Word, EA_Dx,    None, "muls    %ea, D%x",      { m68k_muls(i, Dx, SRC); }),
-  o("1100.ddd.100.000.ddd", "x___________", "_X?z?C", "------------", Byte, Dy_Dx,    None, "abcd    D%y, D%x",      { m68k_abcd(i, Dy, Dx, Xf); }),
-  o("1100.xxx.100.001.yyy", "_x__________", "_X?z?C", "------------", Byte, dAyx,     None, "abcd    -(A%y),-(A%x)", { m68k_abcd(i, SRC, DST, Xf); }),
-  o("1100.ddd.101.000.ddd", "x___________", "______", "pn----------", Long, Dx_Dy,    None, "exg%s   D%y, D%x",      { m68k_exg(Dy, Dx); }),
-  o("1100.aaa.101.001.aaa", "_x__________", "______", "pn----------", Long, Dx_Dy,    None, "exg%s   A%y, A%x",      { m68k_exg(Ay, Ax); }),
-  o("1100.ddd.110.001.aaa", "_x__________", "______", "pn----------", Long, Dx_Dy,    None, "exg%s   A%y, D%x",      { m68k_exg(Ay, Dx); }),
+  o("1100.ddd.0ss.mmm.yyy", "1_1111111111", "__NZ00", Any,  EA_Dx,    rDx,  "and%s   %ea, D%x",      { m68k_and(i, SRC, Dx); }),
+  o("1100.ddd.1ss.mmm.yyy", "s_1111111___", "__NZ00", Any,  Dx_EA,    EA,   "and%s   D%x, %ea",      { m68k_and(i, Dx, SRC); }),
+  o("1100.ddd.011.mmm.yyy", "1_1111111111", "__NZV0", Word, EA_Dx,    rDx,  "mulu    %ea, D%x",      { m68k_mulu(i, Dx, SRC); }),
+  o("1100.ddd.111.mmm.yyy", "1_1111111111", "__NZV0", Word, EA_Dx,    rDx,  "muls    %ea, D%x",      { m68k_muls(i, Dx, SRC); }),
+  o("1100.ddd.100.000.ddd", "x___________", "_X?z?C", Byte, Dy_Dx,    rDx,  "abcd    D%y, D%x",      { m68k_abcd(i, Dy, Dx, Xf); }),
+  o("1100.xxx.100.001.yyy", "_x__________", "_X?z?C", Byte, dAyx,     dAx,  "abcd    -(A%y),-(A%x)", { m68k_abcd(i, SRC, DST, Xf); }),
+  o("1100.ddd.101.000.ddd", "x___________", "______", Long, Dx_Dy,    rDx,  "exg%s   D%y, D%x",      { m68k_exg(Dy, Dx); }),
+  o("1100.aaa.101.001.aaa", "_x__________", "______", Long, Dx_Dy,    rDx,  "exg%s   A%y, A%x",      { m68k_exg(Ay, Ax); }),
+  o("1100.ddd.110.001.aaa", "_x__________", "______", Long, Dx_Dy,    rDx,  "exg%s   A%y, D%x",      { m68k_exg(Ay, Dx); }),
 
-  o("1101.ddd.0ss.mmm.yyy", "111111111111", "_XNZVC", "------------", Any,  EA_Dx,    None, "add%s   %ea, D%x",      { m68k_add(i, SRC, Dx, 0, _XNZVC); }), // gadd ->
-  o("1101.ddd.1ss.mmm.yyy", "s_1111111___", "_XNZVC", "------------", Any,  Dx_EA,    None, "add%s   D%x, %ea",      { m68k_add(i, Dx,  SRC,0, _XNZVC); }), // gadd <-
-  o("1101.aaa.011.mmm.yyy", "111111111111", "______", "------------", Word, EA_Ax,    None, "adda.w  %ea, A%x",      { setval(Ax, Ax + (int16_t)SRC, Long); }),
-  o("1101.aaa.111.mmm.yyy", "111111111111", "______", "------------", Long, EA_Ax,    None, "adda.l  %ea, A%x",      { m68k_add(i, Ax,  SRC, 0, 0); }), // gadd
-  o("1101.ddd.1ss.000.ddd", "x___________", "_XNzVC", "------------", Any,  Dy_Dx,    None, "addx%s  D%y, D%x",      { m68k_add(i, Dy,  Dx, Xf, _XNzVC); }), // gadd
-  o("1101.xxx.1ss.001.yyy", "_x__________", "_XNzVC", "------------", Any,  dAyx,     None, "addx%s  -(A%y),-(A%x)", { m68k_add(i, SRC, DST,Xf, _XNzVC); }), // gadd
+  o("1101.ddd.0ss.mmm.yyy", "111111111111", "_XNZVC", Any,  EA_Dx,    rDx,  "add%s   %ea, D%x",      { m68k_add(i, SRC, Dx, 0, _XNZVC); }), // gadd ->
+  o("1101.ddd.1ss.mmm.yyy", "s_1111111___", "_XNZVC", Any,  Dx_EA,    EA,   "add%s   D%x, %ea",      { m68k_add(i, Dx,  SRC,0, _XNZVC); }), // gadd <-
+  o("1101.aaa.011.mmm.yyy", "111111111111", "______", Word, EA_Ax,    rAx,  "adda.w  %ea, A%x",      { setval(Ax, Ax + (int16_t)SRC, Long); }),
+  o("1101.aaa.111.mmm.yyy", "111111111111", "______", Long, EA_Ax,    rAx,  "adda.l  %ea, A%x",      { m68k_add(i, Ax,  SRC, 0, 0); }), // gadd
+  o("1101.ddd.1ss.000.ddd", "x___________", "_XNzVC", Any,  Dy_Dx,    rDx,  "addx%s  D%y, D%x",      { m68k_add(i, Dy,  Dx, Xf, _XNzVC); }), // gadd
+  o("1101.xxx.1ss.001.yyy", "_x__________", "_XNzVC", Any,  dAyx,     dAx,  "addx%s  -(A%y),-(A%x)", { m68k_add(i, SRC, DST,Xf, _XNzVC); }), // gadd
 
-  o("1110.000.011.mmm.yyy", "s_1111111___", "_XNZVC", "E.rw--------", Word, EA,       None, "asr     %ea",           { m68k_asr(i,  SRC, 1); }),// gshift
-  o("1110.000.111.mmm.yyy", "s_1111111___", "_XNZVC", "E.rw--------", Word, EA,       None, "asl     %ea",           { m68k_asl(i,  SRC, 1); }),// gshift
-  o("1110.001.011.mmm.yyy", "s_1111111___", "_XNZ0C", "E.rw--------", Word, EA,       None, "lsr     %ea",           { m68k_lsr(i,  SRC, 1); }),// gshift
-  o("1110.001.111.mmm.yyy", "s_1111111___", "_XNZ0C", "E.rw--------", Word, EA,       None, "lsl     %ea",           { m68k_lsl(i,  SRC, 1); }),// gshift
-  o("1110.010.011.mmm.yyy", "s_1111111___", "_XNZ0C", "E.rw--------", Word, EA,       None, "roxr    %ea",           { m68k_roxr(i, SRC, 1); }),// gshift
-  o("1110.010.111.mmm.yyy", "s_1111111___", "_XNZ0C", "E.rw--------", Word, EA,       None, "roxl    %ea",           { m68k_roxl(i, SRC, 1); }),// gshift
-  o("1110.011.011.mmm.yyy", "s_1111111___", "__NZ0C", "E.rw--------", Word, EA,       None, "ror     %ea",           { m68k_ror(i,  SRC, 1); }),// gshift
-  o("1110.011.111.mmm.yyy", "s_1111111___", "__NZ0C", "E.rw--------", Word, EA,       None, "rol     %ea",           { m68k_rol(i,  SRC, 1); }),// gshift
-  o("1110.qqq.0ss.000.ddd", "x___________", "_XNZVC", "------------", Any,  q3_Dy,    None, "asr%s   %i, D%y",       { m68k_asr(i,  Dy,  IMM); }),// gshift
-  o("1110.qqq.1ss.000.ddd", "x___________", "_XNZVC", "------------", Any,  q3_Dy,    None, "asl%s   %i, D%y",       { m68k_asl(i,  Dy,  IMM); }),// gshift
-  o("1110.qqq.0ss.001.ddd", "_x__________", "_XNZ0C", "------------", Any,  q3_Dy,    None, "lsr%s   %i, D%y",       { m68k_lsr(i,  Dy,  IMM); }),// gshift
-  o("1110.qqq.1ss.001.ddd", "_x__________", "_XNZ0C", "------------", Any,  q3_Dy,    None, "lsl%s   %i, D%y",       { m68k_lsl(i,  Dy,  IMM); }),// gshift
-  o("1110.qqq.0ss.010.ddd", "__x_________", "_XNZ0C", "------------", Any,  q3_Dy,    None, "roxr%s  %i, D%y",       { m68k_roxr(i, Dy,  IMM); }),// gshift
-  o("1110.qqq.1ss.010.ddd", "__x_________", "_XNZ0C", "------------", Any,  q3_Dy,    None, "roxl%s  %i, D%y",       { m68k_roxl(i, Dy,  IMM); }),// gshift
-  o("1110.qqq.0ss.011.ddd", "___x________", "__NZ0C", "------------", Any,  q3_Dy,    None, "ror%s   %i, D%y",       { m68k_ror(i,  Dy,  IMM); }),// gshift
-  o("1110.qqq.1ss.011.ddd", "___x________", "__NZ0C", "------------", Any,  q3_Dy,    None, "rol%s   %i, D%y",       { m68k_rol(i,  Dy,  IMM); }),// gshift
-  o("1110.ddd.0ss.100.ddd", "____x_______", "_XNZVC", "------------", Any,  Dx_Dy,    None, "asr%s   D%x, D%y",      { m68k_asr(i,  Dy,  Dx & 0x3f); }),// gshift
-  o("1110.ddd.1ss.100.ddd", "____x_______", "_XNZVC", "------------", Any,  Dx_Dy,    None, "asl%s   D%x, D%y",      { m68k_asl(i,  Dy,  Dx & 0x3f); }),// gshift
-  o("1110.ddd.0ss.101.ddd", "_____x______", "_XNZ0C", "------------", Any,  Dx_Dy,    None, "lsr%s   D%x, D%y",      { m68k_lsr(i,  Dy,  Dx & 0x3f); }),// gshift
-  o("1110.ddd.1ss.101.ddd", "_____x______", "_XNZ0C", "------------", Any,  Dx_Dy,    None, "lsl%s   D%x, D%y",      { m68k_lsl(i,  Dy,  Dx & 0x3f); }),// gshift
-  o("1110.ddd.0ss.110.ddd", "______x_____", "_XNZ0C", "------------", Any,  Dx_Dy,    None, "roxr%s  D%x, D%y",      { m68k_roxr(i, Dy,  Dx & 0x3f); }),// gshift
-  o("1110.ddd.1ss.110.ddd", "______x_____", "_XNZ0C", "------------", Any,  Dx_Dy,    None, "roxl%s  D%x, D%y",      { m68k_roxl(i, Dy,  Dx & 0x3f); }),// gshift
-  o("1110.ddd.0ss.111.ddd", "_______x____", "__NZ0C", "------------", Any,  Dx_Dy,    None, "ror%s   D%x, D%y",      { m68k_ror(i,  Dy,  Dx & 0x3f); }),// gshift
-  o("1110.ddd.1ss.111.ddd", "_______x____", "__NZ0C", "------------", Any,  Dx_Dy,    None, "rol%s   D%x, D%y",      { m68k_rol(i,  Dy,  Dx & 0x3f); }),// gshift
+  o("1110.000.011.mmm.yyy", "s_1111111___", "_XNZVC", Word, EA,       EA,   "asr     %ea",           { m68k_asr(i,  SRC, 1); }),// gshift
+  o("1110.000.111.mmm.yyy", "s_1111111___", "_XNZVC", Word, EA,       EA,   "asl     %ea",           { m68k_asl(i,  SRC, 1); }),// gshift
+  o("1110.001.011.mmm.yyy", "s_1111111___", "_XNZ0C", Word, EA,       EA,   "lsr     %ea",           { m68k_lsr(i,  SRC, 1); }),// gshift
+  o("1110.001.111.mmm.yyy", "s_1111111___", "_XNZ0C", Word, EA,       EA,   "lsl     %ea",           { m68k_lsl(i,  SRC, 1); }),// gshift
+  o("1110.010.011.mmm.yyy", "s_1111111___", "_XNZ0C", Word, EA,       EA,   "roxr    %ea",           { m68k_roxr(i, SRC, 1); }),// gshift
+  o("1110.010.111.mmm.yyy", "s_1111111___", "_XNZ0C", Word, EA,       EA,   "roxl    %ea",           { m68k_roxl(i, SRC, 1); }),// gshift
+  o("1110.011.011.mmm.yyy", "s_1111111___", "__NZ0C", Word, EA,       EA,   "ror     %ea",           { m68k_ror(i,  SRC, 1); }),// gshift
+  o("1110.011.111.mmm.yyy", "s_1111111___", "__NZ0C", Word, EA,       EA,   "rol     %ea",           { m68k_rol(i,  SRC, 1); }),// gshift
+  o("1110.qqq.0ss.000.ddd", "x___________", "_XNZVC", Any,  q3_Dy,    rDy,  "asr%s   %i, D%y",       { m68k_asr(i,  Dy,  IMM); }),// gshift
+  o("1110.qqq.1ss.000.ddd", "x___________", "_XNZVC", Any,  q3_Dy,    rDy,  "asl%s   %i, D%y",       { m68k_asl(i,  Dy,  IMM); }),// gshift
+  o("1110.qqq.0ss.001.ddd", "_x__________", "_XNZ0C", Any,  q3_Dy,    rDy,  "lsr%s   %i, D%y",       { m68k_lsr(i,  Dy,  IMM); }),// gshift
+  o("1110.qqq.1ss.001.ddd", "_x__________", "_XNZ0C", Any,  q3_Dy,    rDy,  "lsl%s   %i, D%y",       { m68k_lsl(i,  Dy,  IMM); }),// gshift
+  o("1110.qqq.0ss.010.ddd", "__x_________", "_XNZ0C", Any,  q3_Dy,    rDy,  "roxr%s  %i, D%y",       { m68k_roxr(i, Dy,  IMM); }),// gshift
+  o("1110.qqq.1ss.010.ddd", "__x_________", "_XNZ0C", Any,  q3_Dy,    rDy,  "roxl%s  %i, D%y",       { m68k_roxl(i, Dy,  IMM); }),// gshift
+  o("1110.qqq.0ss.011.ddd", "___x________", "__NZ0C", Any,  q3_Dy,    rDy,  "ror%s   %i, D%y",       { m68k_ror(i,  Dy,  IMM); }),// gshift
+  o("1110.qqq.1ss.011.ddd", "___x________", "__NZ0C", Any,  q3_Dy,    rDy,  "rol%s   %i, D%y",       { m68k_rol(i,  Dy,  IMM); }),// gshift
+  o("1110.ddd.0ss.100.ddd", "____x_______", "_XNZVC", Any,  Dx_Dy,    rDy,  "asr%s   D%x, D%y",      { m68k_asr(i,  Dy, Dx & 0x3f); }),// gshift
+  o("1110.ddd.1ss.100.ddd", "____x_______", "_XNZVC", Any,  Dx_Dy,    rDy,  "asl%s   D%x, D%y",      { m68k_asl(i, Dy, Dx & 0x3f); }),// gshift
+  o("1110.ddd.0ss.101.ddd", "_____x______", "_XNZ0C", Any,  Dx_Dy,    rDy,  "lsr%s   D%x, D%y",      { m68k_lsr(i, Dy, Dx & 0x3f); }),// gshift
+  o("1110.ddd.1ss.101.ddd", "_____x______", "_XNZ0C", Any,  Dx_Dy,    rDy,  "lsl%s   D%x, D%y",      { m68k_lsl(i, Dy, Dx & 0x3f); }),// gshift
+  o("1110.ddd.0ss.110.ddd", "______x_____", "_XNZ0C", Any,  Dx_Dy,    rDy,  "roxr%s  D%x, D%y",      { m68k_roxr(i, Dy, Dx & 0x3f); }),// gshift
+  o("1110.ddd.1ss.110.ddd", "______x_____", "_XNZ0C", Any,  Dx_Dy,    rDy,  "roxl%s  D%x, D%y",      { m68k_roxl(i, Dy, Dx & 0x3f); }),// gshift
+  o("1110.ddd.0ss.111.ddd", "_______x____", "__NZ0C", Any,  Dx_Dy,    rDy,  "ror%s   D%x, D%y",      { m68k_ror(i, Dy, Dx & 0x3f); }),// gshift
+  o("1110.ddd.1ss.111.ddd", "_______x____", "__NZ0C", Any,  Dx_Dy,    rDy,  "rol%s   D%x, D%y",      { m68k_rol(i,  Dy,  Dx & 0x3f); }),// gshift
 
-  o("1010.---.---.---.---", "____________", "______", "------------", None, None,     None, "1010",                  { m68k_emul1010(i.op); }),
-  o("1111.---.---.---.---", "____________", "______", "------------", None, None,     None, "1111",                  { m68k_emul1111(i.op); }),
+  o("1010.---.---.---.---", "____________", "______", None, None,     None, "1010",                  { m68k_emul1010(i.op); }),
+  o("1111.---.---.---.---", "____________", "______", None, None,     None, "1111",                  { m68k_emul1111(i.op); }),
 
-  o("0100.111.001.110.100", "____________", "______", "------------", Word, None,     None, "1:rtd", {}),
-  o("0100.100.001.001.vvv", "____________", "______", "------------", None, None,     None, "1:bkpt", {}),
-  o("0100.101.011.111.010", "____________", "______", "------------", None, None,     None, "?:bgnd", {}),
-  o("0000.0ss.011.mmm.yyy", "__1__111111_", "______", "------------", Any2, None,     None, "2:chk2", {}),
-  o("0000.111.0ss.mmm.yyy", "__1111111___", "______", "------------", Any,  None,     None, "1:moves", {}),
-  o("0000.011.011.mmm.yyy", "11----------", "_XNZVC", "------------", None, None,     None, "?:rtm", {}),
-  o("0000.011.011.mmm.yyy", "__1__111111_", "_XNZVC", "------------", None, None,     None, "?:callm", {}),
-  o("0000.110.011.111.100", "------------", "_XNZVC", "------------", Word, None,     None, "?:cas2.w", {}),
-  o("0000.111.011.111.100", "------------", "_XNZVC", "------------", Long, None,     None, "2:cas2.l", {}),
-  o("1110.100.011.mmm.yyy", "1_1__111111_", "__NZ00", "------------", Word, None,     None, "2:bftst", {}),
-  o("1110.101.011.mmm.yyy", "1_1__1111___", "__NZ00", "------------", Word, None,     None, "2:bfchg", {}),
-  o("1110.110.011.mmm.yyy", "1_1__1111___", "__NZ00", "------------", Word, None,     None, "2:bfclr", {}),
-  o("1110.111.011.mmm.yyy", "1_1__1111___", "__NZ00", "------------", Word, None,     None, "2:bfset", {}),
-  o("1110.100.111.mmm.yyy", "1_1__111111_", "__NZ00", "------------", Word, None,     None, "2:bfextu", {}),
-  o("1110.101.111.mmm.yyy", "1_1__111111_", "__NZ00", "------------", Word, None,     None, "2:bfexts", {}),
-  o("1110.110.111.mmm.yyy", "1_1__111111_", "__NZ00", "------------", Word, None,     None, "2:bffo", {}),
-  o("1110.111.111.mmm.yyy", "1_1__1111___", "__NZ00", "------------", Word, None,     None, "2:bfins", {}),
+  o("0100.111.001.110.100", "____________", "______", Word, None,     None, "1:rtd", {}),
+  o("0100.100.001.001.vvv", "____________", "______", None, None,     None, "1:bkpt", {}),
+  o("0100.101.011.111.010", "____________", "______", None, None,     None, "?:bgnd", {}),
+  o("0000.0ss.011.mmm.yyy", "__1__111111_", "______", Any2, None,     None, "2:chk2", {}),
+  o("0000.111.0ss.mmm.yyy", "__1111111___", "______", Any,  None,     None, "1:moves", {}),
+  o("0000.011.011.mmm.yyy", "11----------", "_XNZVC", None, None,     None, "?:rtm", {}),
+  o("0000.011.011.mmm.yyy", "__1__111111_", "_XNZVC", None, None,     None, "?:callm", {}),
+  o("0000.110.011.111.100", "____________", "_XNZVC", Word, None,     None, "?:cas2.w", {}),
+  o("0000.111.011.111.100", "_____________","_XNZVC", Long, None,     None, "2:cas2.l", {}),
+  o("1110.100.011.mmm.yyy", "1_1__111111_", "__NZ00", Word, None,     None, "2:bftst", {}),
+  o("1110.101.011.mmm.yyy", "1_1__1111___", "__NZ00", Word, None,     None, "2:bfchg", {}),
+  o("1110.110.011.mmm.yyy", "1_1__1111___", "__NZ00", Word, None,     None, "2:bfclr", {}),
+  o("1110.111.011.mmm.yyy", "1_1__1111___", "__NZ00", Word, None,     None, "2:bfset", {}),
+  o("1110.100.111.mmm.yyy", "1_1__111111_", "__NZ00", Word, None,     None, "2:bfextu", {}),
+  o("1110.101.111.mmm.yyy", "1_1__111111_", "__NZ00", Word, None,     None, "2:bfexts", {}),
+  o("1110.110.111.mmm.yyy", "1_1__111111_", "__NZ00", Word, None,     None, "2:bffo", {}),
+  o("1110.111.111.mmm.yyy", "1_1__1111___", "__NZ00", Word, None,     None, "2:bfins", {}),
   { },
 };
 #undef o
@@ -2117,9 +2110,9 @@ void cpu_showregs()
 
 uint32_t cpu_fetch(const int size, const char *lbl) {
   switch(size) {
-  case Byte: return cpu_fetch16(PC) & 0xFF;
-  case Word: return cpu_fetch16(PC);
-  case Long: return cpu_fetch32(PC);
+  case Byte: TR(0x410); return cpu_fetch16(PC) & 0xFF;
+  case Word: TR(0x410); return cpu_fetch16(PC);
+  case Long: TR(0x820); return cpu_fetch32(PC);
   default:
     Assert(0);
   }
@@ -2129,9 +2122,9 @@ uint32_t cpu_fetch(const int size, const char *lbl) {
 uint32_t cpu_read(uint32_t addr, int size) {
   m68k_check_address(addr, size, Sf ? 0x15 : 0x11, "read");
   switch (size) {
-  case Byte: return cpu_read8(addr);
-  case Word: return cpu_read16(addr);
-  case Long: return cpu_read32(addr);
+  case Byte: TR(0x410); return cpu_read8(addr);
+  case Word: TR(0x410); return cpu_read16(addr);
+  case Long: TR(0x820); return cpu_read32(addr);
   default:
     Assert(0);
   }
@@ -2140,9 +2133,9 @@ uint32_t cpu_read(uint32_t addr, int size) {
 void cpu_write(uint32_t addr, uint32_t val, int size) {
   m68k_check_address(addr, size, Sf ? 0x05 : 0x01, "write");
   switch(size) {
-  case Byte: cpu_write8(addr, val); break;
-  case Word: cpu_write16(addr, val); break;
-  case Long: cpu_write32(addr, val); break;
+  case Byte: TR(0x401); cpu_write8(addr, val); break;
+  case Word: TR(0x401); cpu_write16(addr, val); break;
+  case Long: TR(0x802); cpu_write32(addr, val); break;
   default:
     Assert(0);
   }
@@ -2150,21 +2143,25 @@ void cpu_write(uint32_t addr, uint32_t val, int size) {
 
 void cpu_push16(uint16_t v) {
   uint32_t addr = sp_dec(2);
-  
+
+  TR(0x401);
   cpu_write16(addr, v, dstk::STACK);
 }
 
 uint16_t cpu_pop16() {
+  TR(0x410);
   return cpu_read16(sp_inc(2), dstk::STACK);
 }
 
 void cpu_push32(uint32_t v) {
   uint32_t addr = sp_dec(4);
   
+  TR(0x802);
   cpu_write32(addr, v, dstk::STACK);
 }
 
 uint32_t cpu_pop32() {
+  TR(0x820);
   uint32_t v = cpu_read32(sp_inc(4), dstk::STACK);
   return v;
 }
@@ -2190,19 +2187,14 @@ void load_syms()
   }
 }
 
-#define MV_LEA  0xf1c041c0
-#define MV_JMP  0xffc04ec0
-#define MV_BCC  0xf0006000
-#define MV_DBCC 0xf0f850c8
-#define MV_RTS  0xffff4e75
-#define MV_RTE  0xffff4e73
-#define MV_JSR  0xffc04e80
+constexpr uint32_t MV_LEA  = 0xf1c041c0;
+constexpr uint32_t MV_JMP  = 0xffc04ec0;
+constexpr uint32_t MV_BCC  = 0xf0006000;
+constexpr uint32_t MV_DBCC = 0xf0f850c8;
+constexpr uint32_t MV_RTS  = 0xffff4e75;
+constexpr uint32_t MV_RTE  = 0xffff4e73;
+constexpr uint32_t MV_JSR  = 0xffc04e80;
 
-// 111.000 w
-// 111.001 l
-// 111.010 pc.16
-// 111.011 pc.xn
-// 111.100 imm
 const int isimm(int eat)
 {
   if (eat == 0x39)
@@ -2255,6 +2247,7 @@ void dumpcfg(int off, int base, int size)
 	if (isimm(i.src.type)) {
 	  nxt[1] = SRCADDR;
 	}
+	printf("jmp/jsr: %x, %x %x\n", PC, nxt[0], nxt[1]);
 	break;
       case MV_DBCC:
 	/* conditional jump */
@@ -2263,12 +2256,14 @@ void dumpcfg(int off, int base, int size)
       case MV_BCC: 
 	if ((op & 0xFF00) == 0x6000) {
 	  /* unconditional jump */
-	  nxt[0] = -1;
+	  //nxt[0] = -1;
 	  nxt[1] = IMM;
+	  printf("next.bra: %x %x\n",  nxt[0], nxt[1]);
 	}
 	else {
 	  /* conditional jump */
 	  nxt[1] = IMM;
+	  printf("next: %x %x\n",  nxt[0], nxt[1]);
 	}
 	break;
       case MV_RTS:

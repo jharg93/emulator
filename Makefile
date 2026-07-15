@@ -50,6 +50,8 @@ n64: n64.cc $(STDC)
 atarixl: atarixl.cc cpu/cpu_6502.cc $(STDC)
 	$(LXCPP) $(CFLAGS) -o atarixl atarixl.cc cpu/cpu_6502.cc $(STDC)
 
+atarist: atarist.cc ${STDC}
+	$(LXCPP) $(CFLAGS) -DM68K -o atarist atarist.cc $(STDC)
 
 invaders: i8080.c common/bus.cc
 	$(LXCPP) $(CFLAGS) -o invaders i8080.c common/bus.cc common/gr.cc

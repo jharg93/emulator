@@ -2258,16 +2258,16 @@ void amiga::renderbg(int y)
   }
 }
 
-#define bltro
+//#define bltro
 int amiga::bpdma(int mode) {
-  int nm = (hPos & 1) ? Odd : Even;
+  int nmode = (hPos & 1) ? Odd : Even;
 
   // outside visible range
   if (vPos < screen.y0 || vPos >= screen.y1) {
-    return nm;
+    return nmode;
   }
   if (totdma >= wdma)
-    return nm;
+    return nmode;
 
   // get bitplane number
   int bp = ((mode >> 4) & 0xF);
@@ -2464,7 +2464,7 @@ bool amiga::vid_tick()
   // 8367: PAL      00
   // 8370: FAT NTSC 10
   // 8371: FAT PAL  00
-  vposr  = 0x00 | (vPos >> 8);
+  vposr  = 0x10 | (vPos >> 8);
   vhposr = (vPos << 8) | hPos;
 
   if (hPos == 0) {
@@ -3296,8 +3296,8 @@ int main(int argc, char *argv[])
   floppyLoad(0, adf);
 
   // https://github.com/nicodex/amiga-ocs-cpubltro/blob/main/cpubltro.asm
-  //thegame.init(romfile); //"roms/de-amiga-os-130.rom");
-  thegame.init("cpubltro-0f8.rom");
+  thegame.init(romfile); //"roms/de-amiga-os-130.rom");
+  //thegame.init("cpubltro-0f8.rom");
   //thegame.init("emutos-amiga-rom-1.3//emutos-amiga.rom");
   //thegame.init("DiagROM/16bit.bin");
   
@@ -3327,3 +3327,4 @@ int main(int argc, char *argv[])
   cpu_shutdown();
   return 0;
 }
+r

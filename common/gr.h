@@ -60,6 +60,21 @@ enum Key {
 
 #define BGR 1
 
+template <int w>
+struct Scanline {
+  int clr[w];
+  int pri[w];
+  int collide[w];
+  void setpix(int x, int c, int p) {
+    if (x < 0 || x >= w || c == -1)
+      return;
+    if (p >= pri[x]) {
+      clr[x] = c;
+      pri[x] = p;
+    };
+  };
+};
+
 class ScreenBmp {
   color *scrBuf = NULL;
 public:

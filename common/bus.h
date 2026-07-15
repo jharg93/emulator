@@ -55,6 +55,9 @@ public:
   void dump(int start=0, int end=0);
 
   static uint8_t bus_data;
+
+  virtual void bus_error(uint32_t addr, int mode) {
+  };
 };
 
 int bememio(void *arg, uint32_t addr, int mode, iodata_t&data);

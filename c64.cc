@@ -614,7 +614,6 @@ struct c64 : public bus_t {
     return DEN() && (n >= 48) && (n <= 247) && ((n & 7) == YSCROLL());
   };
   c64();
-  uint8_t *charram(int offset);
   uint8_t  vicram(int offset);
   
   int cia1io(uint32_t offset, const int mode, iodata_t& val);
@@ -1542,17 +1541,7 @@ struct bmp {
 
 bool collide = false;
 
-uint8_t *c64::charram(int offset)
-{
-  offset += chrbase;
-  
-  switch(offset) {
-  case 0x1000 ... 0x1FFF:
-  case 0x9000 ... 0x9FFF:
-    return &charset[offset & 0xFFF];
-  }
-  return &ram[offset];
-}
+// get vicram memory base
 uint8_t c64::vicram(int offset)
 {
   offset += chrbase;
@@ -1864,14 +1853,11 @@ bool sprite_t::load(c64 *c, int n, int y)
 // +--------+--------+--------+--------+
 // draws background with pri == 2
 // draws sprite with pri == 1 or 3
-// if color# == 0 and pri == 1, then override
 auto spix = [](int *rline, int x, uint8_t bmp, int bpp, int w, int *clr, int pri = 0) {
-  int c, rpri, rclr;
-  
   if (x >= 0 && x < 320) {
-    c = (bmp >> (8 - bpp));
-    rpri = (rline[x] >> 24);
-    rclr = (rline[x] >> 16) & 0xF;
+    auto c = (bmp >> (8 - bpp));
+    auto rpri = (rline[x] >> 24);
+    auto rclr = (rline[x] >> 16) & 0xF;
     if (clr[c] != -1) {
       if (rpri && rclr != 0)
 	collide = true;
@@ -1895,11 +1881,11 @@ void c64::drawsprite(int n, int y) {
   if (!s->load(this, n, y))
     return;
   collide = false;
-  int px = s->sx;
-  int np = s->mc * s->ex;
-  uint8_t *bp = &ram[s->sp + ((y - s->sy) / s->ey) * 3];
+  auto px = s->sx;
+  auto np = s->mc * s->ex;
+  auto sptr = &ram[s->sp + ((y - s->sy) / s->ey) * 3];
   for (int tx = 0; tx < 3; tx++) {
-    uint8_t bmp = bp[tx];
+    auto bmp = sptr[tx];
     for (int i = 0; i < 8; i += s->mc) {
       for (int k = 0; k < np; k++) {
 	spix(rline, px++, bmp, s->mc, np, s->clr, s->pri ? PRI_3 : PRI_1);
@@ -1917,7 +1903,6 @@ void c64::drawline(int y)
 {
   int clr[4], ch, smode;
   int cb, sb, bpp, fy, ty;
-  uint8_t bmp;
 
   smode = scrmode();
 
@@ -1935,10 +1920,11 @@ void c64::drawline(int y)
   sprite_ptr = &screen_ram[0x3F8];
   chrbase = vicbase + cb;
 
+  int bg0 = bg_clr[0] & 0xF;
   for (int sx = 0; sx < 320; sx += 8) {
     const int tx = (sx / 8);
     const int addr = (ty * 40) + tx;
-    const int  cr = color_ram[addr] & 0xF;
+    const int cr = color_ram[addr] & 0xF;
     
     bpp = 1;
     ch = screen_ram[addr];
@@ -1946,7 +1932,7 @@ void c64::drawline(int y)
       /* Char mode
        * 2 colors from BG0.lo, Color RAM.lo 
        * bitmap = &char_rom[ch * 8 + (y % 8)] */
-      clr[0] = bg_clr[0] & 0xF;
+      clr[0] = bg0;
       clr[1] = cr;
     }
     else if (smode == mode_mcchar) {
@@ -1956,14 +1942,14 @@ void c64::drawline(int y)
        * bitmap = &char_rom[ch * 8 + (y % 8)]
        */
       if ((cr & 0x8) == 0x8) {
-	clr[0] = bg_clr[0] & 0xF;
+	clr[0] = bg0;
 	clr[1] = bg_clr[1] & 0xF;
 	clr[2] = bg_clr[2] & 0xF;
 	clr[3] = cr & 0x7;
 	bpp = 2;
       }
       else {
-	clr[0] = bg_clr[0] & 0xF;
+	clr[0] = bg0;
 	clr[1] = cr;
       }
     }
@@ -1986,7 +1972,7 @@ void c64::drawline(int y)
     else if (smode == mode_mcbitmap) {
       /* Multi-color bitmap mode
        * 4 Colors from BG0, Screen RAM[hi,lo], Color RAM */
-      clr[0] = bg_clr[0] & 0xF;
+      clr[0] = bg0;
       clr[1] = (ch >> 4) & 0xF;
       clr[2] = (ch >> 0) & 0xF;
       clr[3] = cr;
@@ -1996,7 +1982,7 @@ void c64::drawline(int y)
 
     // get start pixel and bitmap
     int px = sx + XSCROLL();
-    bmp = vicram((ch * 8) + fy);
+    auto bmp = vicram((ch * 8) + fy);
     for (int i = 0; i < 8; i += bpp) {
       for (int k = 0; k < bpp; k++) {
 	spix(rline, px++, bmp, bpp, bpp, clr, PRI_2);
@@ -2107,7 +2093,6 @@ void UserPort::tick(c64 *c) {
   bool pa3 = (ddr & pra & 0x08) != 0;
   bool pa4 = (ddr & pra & 0x10) != 0;
   bool pa5 = (ddr & pra & 0x20) != 0;
-  printf("pa543 = %x%x%x\n", pa5, pa4, pa3);
   sc(!pa4, pa_in, 0x40);
   sc(!pa5, pa_in, 0x80);
   if (!pa3 && flag_prev) {
@@ -2157,10 +2142,6 @@ void c64::ppu_tick()
   if (++dot < nextline) {
     return;
   }
-  if (is_badline(row)) {
-    screen->scrline(0, row, EX, COLS() == 40 ? 3 : 4);
-    screen->scrtext(SCREEN_XRES-48, row, 11, "%d%c%d%c", cols, 'a' + XSCROLL(), rows, 'a' + YSCROLL());
-  }
   /* Row is Displayed video line */
   if (row >= 0 && row < 200) {
     smode = scrmode();
@@ -2185,6 +2166,10 @@ void c64::ppu_tick()
   dot -= nextline;
   scanline++;
   if (is_badline(scanline)) {
+    screen->scrline(0, scanline, EX, COLS() == 40 ? 3 : 4);
+    screen->scrtext(SCREEN_XRES-48, scanline, 15, "%c%d%c%d",
+		    cols == 40 ? 'a' : 'b', XSCROLL(),
+		    rows == 25 ? 'A' : 'B', YSCROLL());
     nextline = CYCLES_PER_BADLINE;
   }
   else {

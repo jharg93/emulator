@@ -37,6 +37,7 @@ int bus_t::write(uint32_t addr, iodata_t data, int sz) {
     bus_hook(addr, 'w', data);
   }
   if ((h = find(addr, _WR)) == NULL) {
+    bus_error(addr, 'w');
     //flogger(0, "Error: no write address: %.8x\n", addr);
     return -1;
   }
@@ -57,6 +58,7 @@ int bus_t::read(uint32_t addr, iodata_t& data, int sz) {
     bus_hook(addr, 'r', data);
   }
   if ((h = find(addr, _RD)) == NULL) {
+    bus_error(addr, 'r');
     //flogger(0, "Error: no read address:  %.8x\n", addr);
     return -1;
   }

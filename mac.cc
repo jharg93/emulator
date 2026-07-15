@@ -1227,7 +1227,6 @@ void cpu_write8(const uint32_t addr, const uint8_t v, int type) {
 void cpu_write16(const uint32_t addr, const uint16_t v, int type) {
   void *ptr;
 
-  printf("write16: %.8x %.8x : %.4x\n", addr, v, type);
   if ((ptr = ioptr(addr, 'w')) != NULL) {
     put16be(ptr, v);
   }
@@ -1239,7 +1238,6 @@ void cpu_write16(const uint32_t addr, const uint16_t v, int type) {
 void cpu_write32(const uint32_t addr, const uint32_t v, int type) {
   void *ptr;
 
-  printf("write32: %.8x %.8x : %.4x\n", addr, v, type);
   if ((ptr = ioptr(addr, 'w')) != NULL) {
     put32be(ptr, v);
   }
@@ -1711,9 +1709,8 @@ const char *eastr[16] = { "Dn", "An", "(An)", "(An)+", "-(An)", "(An,d16)", "(An
 
 void done_json() {
   for (int i = 0; i < 16; i++) {
-    printf("ea[%-10s]: %4x %4x\n",
-	   eastr[i] ? eastr[i] : "",
-	   csrc[i], cdst[i]);
+    printf("ea[%-10s]\n",
+	   eastr[i] ? eastr[i] : "");
   }
 }
 
