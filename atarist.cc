@@ -16,23 +16,14 @@ extern int trace;
 
 constexpr auto WHITE = MKRGB(255,255,255);
 
-/* CART Header
- * 01 = init
- * 02 = init/post isr
- * 04 = system init donw
- * 08 = after gemdos
- * 10 =
- * 20 = desktop acc
- * 40 = tos app
- * 80 = ttp
- */
 void flogger(int n, const char *fmt, ...) {
   va_list ap;
-  printf("flogger: ");
+  printf("%.8x flogger: ", SPC);
   va_start(ap, fmt);
   vprintf(fmt, ap);
 }
 
+// build color from plane data
 auto pclr = [](uint16_t *p, uint16_t &mask) {
   int clr = 0;
   if (p[0] & mask) clr |= 0x1;
@@ -42,36 +33,22 @@ auto pclr = [](uint16_t *p, uint16_t &mask) {
   mask >>= 1;
   return clr;
  };
+
 //https://github.com/dmcoles/EstyJs/tree/master
-/*
- * timer::tick() {
- *   int ic = ctrl & 0xF;
- *   if (ctrl > 0 && ctrl < 8) {
- *     cntr2++;
- *     int n = scale * clockCyclesPerCpuCycle;
- *     while (cntr2 > n) {
- *       cntr2 -= n;
- *       cntr--;
- *       if (cntr == 0) {
- *         cntr = data;
- *         raise(id);
- *       }
- *     }
- *   }
- * }
- */    
- 
 
 /* Atari ST memory map
  * https://temlib.org/AtariForumWiki/index.php/Exception_vectors_and_basic_RAM_%26_ROM_locations
  * https://temlib.org/AtariForumWiki/index.php/Memory_Map_for_Atari_ST,STE,TT_and_Falcon
+ * https://github.com/terriblefire/diagromst/blob/master/DiagROM.asm
  * https://sarnau.info/atari-st-book-bios-xbios-rom-listing/
  * https://docs.sidecartridge.com/sidecartridge-multidevice/hardware_interface/
  * http://cd.textfiles.com/ataricompendium/BOOK/PDF/APPENDB.PDF
  * https://www.atari-wiki.com/index.php?title=Atari_ST/STe/MSTe/TT/F030_Hardware_Register_Listing
  *
  * https://atari.8bitchip.info/cartST.html
- * 
+ * https://www.atarimagazines.com/v4n12/STCartridges.php
+ * https://sidecartridge.com/roms/
+ *
  * CPU: 68000
  * 
  * 320x200x16, 3R3G3B = 512 palette colors
@@ -79,9 +56,9 @@ auto pclr = [](uint16_t *p, uint16_t &mask) {
  * 640x400x1
  *
  * IRQ:
- *  lvl1: tt vme
+ *  lvl1
  *  lvl2: hbl
- *  lvl3: tt vme
+ *  lvl3
  *  lvl4: vbl
  *  lvl5:
  *  lvl6: mfp
@@ -179,10 +156,21 @@ void cpu_reset(uint32_t addr) {
   PC = cpu_read32(4);
 }
 
+// parallel port register
+// data direction
+// active edge register
+//  80 monochrome
+//  40 rs232 ring
+//  20 fdc/hdc interrupt
+//  10 keyboard/midi interrupt
+//  08 --
+//  04 rs232 cts
+//  02 rs232 dcd
+//  01 centronics busy
 enum MfpRegs {
-  GPIP = 0x01, // General Purpose I / O Data Register
-  AER  = 0x03, // Active Edge Register
-  DDR  = 0x05, // Data Direction Register
+  GPIP = 0x01, // General Purpose I/O Data Register
+  AER  = 0x03, // Active Edge Register (gpio)
+  DDR  = 0x05, // Data Direction Register (parallel port)
   IERA = 0x07, // interrupt enable chan 8..15
   IERB = 0x09, // interrupt enable chan 0..7
   IPRA = 0x0b, // interrupt pending chan 8..15
@@ -220,68 +208,109 @@ enum MfpRegs {
 };
 
 struct keymap {
-  int key, code;
+  int key, code, state;
 };
 const auto mkkeys() {
+  // https://www.millisecond.com/support/docs/current/html/language/scancodes.htm
   std::vector<keymap> kbdcodes {
-    { '1', 0x02 },
-    { '2', 0x03 },
-    { '3', 0x04 },
-    { '4', 0x05 },
-    { '5', 0x06 },
-    { '6', 0x07 },
-    { '7', 0x08 },
-    { '8', 0x09 },
-    { '9', 0x0a },
-    { '0', 0x0b },
+    { '1', 2 },
+    { '2', 3 },
+    { '3', 4 },
+    { '4', 5 },
+    { '5', 6 },
+    { '6', 7 },
+    { '7', 8 },
+    { '8', 9 },
+    { '9', 10 },
+    { '0', 11 },
+    { '-', 12 },
+    { '=', 13 },
 
-    { 'q', 0x10 },
-    { 'w', 0x11 },
-    { 'e', 0x12 },
-    { 'r', 0x13 },
-    { 't', 0x14 },
-    { 'y', 0x15 },
-    { 'u', 0x16 },
-    { 'i', 0x17 },
-    { 'o', 0x18 },
-    { 'p', 0x19 },
-    { '[', 0x1a },
-    { ']', 0x1b },
+    { K_TAB, 15 },
+    { 'q', 16 },
+    { 'w', 17 },
+    { 'e', 18 },
+    { 'r', 19 },
+    { 't', 20 },
+    { 'y', 21 },
+    { 'u', 22 },
+    { 'i', 23 },
+    { 'o', 24 },
+    { 'p', 25 },
+    { '[', 26 },
+    { ']', 27 },
+    { K_ENTER, 28 },
+    { K_LCTRL, 29 },
 
-    { 'a', 0x1e },
-    { 's', 0x1f },
-    { 'd', 0x20 },
-    { 'f', 0x21 },
-    { 'g', 0x22 },
-    { 'h', 0x23 },
-    { 'j', 0x24 },
-    { 'k', 0x25 },
-    { 'l', 0x26 },
-    { ';', 0x27 },
-    { '\'', 0x29 },
+    { 'a', 30 },
+    { 's', 31 },
+    { 'd', 32 },
+    { 'f', 33 },
+    { 'g', 34 },
+    { 'h', 35 },
+    { 'j', 36 },
+    { 'k', 37 },
+    { 'l', 38 },
+    { ';', 39 },
+    { '\'', 40 }, 
+    { '`', 41 },
 
-    { 'z', 0x2c },
-    { 'x', 0x2d },
-    { 'c', 0x2e },
-    { 'v', 0x2f },
-    { 'b', 0x30 },
-    { 'n', 0x31 },
-    { 'm', 0x32 },
-    { ',', 0x33 },
-    { '.', 0x34 },
+    { K_LSHIFT, 42 },
+    { '\\', 43 },
+    { 'z', 44 },
+    { 'x', 45 },
+    { 'c', 46 },
+    { 'v', 47 },
+    { 'b', 48 },
+    { 'n', 49 },
+    { 'm', 50 },
+    { ',', 51 },
+    { '.', 52 },
+    { '\/', 53 },
+    { K_RSHIFT, 54 },
+    { K_F1, 59 },
+    { K_F2, 60 },
+    { K_F3, 61 },
+    { K_F4, 62 },
+    { K_F5, 63 },
+    { K_F6, 64 },
+    { K_F7, 65 },
+    { K_F8, 66 },
+    { K_LEFT, 75 },
+    { K_RIGHT, 77 },
+    { K_UP, 72 },
+    { K_DOWN, 80 },
   };
   return kbdcodes;
 };
-const auto keytbl = mkkeys();
+auto keytbl = mkkeys();
 
 // https://www.nxp.com/docs/en/reference-manual/MC68901UM.pdf
 // https://www.lynn3686.com/mfp.html
 // https://github.com/frno7/cf68901
 // Timer C is 200Hz clock
+/*
+ * pri desc
+ *  15 mono monitor detect
+ *  14 rs232 ring
+ *  13 timer a
+ *  12 rs232 rx full
+ *  11 rs232 rx error
+ *  10 rs232 tx empty
+ *   9 rs232 tx full
+ *   8 hbl (timer b)
+ *   7 disk drive
+ *   6 kbd/midi
+ *   5 timer c
+ *   4 baud (timer d)
+ *   3 gpu done
+ *   2 rs232 cts
+ *   1 rs232 dcd
+ *   0 centronics busy
+ */
 struct mfptimer {
   uint8_t  ctrl = 0;
   uint8_t  data = 0;
-
   int32_t  counter = 0;
   int      id = 0;
   char     k;
@@ -298,14 +327,10 @@ struct mfptimer {
   // start new timer
   void start(uint8_t nctrl, uint8_t ndata) {
     nctrl &= 0xF;
-    printf("timer start%c: ctrl:%.2x/%.2x data:%.2x/%.2x\n",
-	   k,
-	   ctrl, nctrl,
-	   data, ndata);
     if (!ctrl && nctrl) {
-      printf("start timer....: %c\n", k);
       data = ndata;
       counter = data * prescale(nctrl);
+      printf("start timer..: %c %.2x %.2x : %5d\n", k, nctrl, data, counter);
     } else if (ctrl && !nctrl) {
       printf("stop timer...: %c\n", k);
       counter = -1;
@@ -314,6 +339,7 @@ struct mfptimer {
   };
   bool tick() {
     if (!(ctrl & 7)) {
+      // disabled
       return false;
     }
     if (counter > 0)
@@ -326,19 +352,25 @@ struct mfptimer {
   };
 };
 
-/* Read cycle
- * if (_CS && _DS && R/_W) {
- *   D07 = read_reg(RS15);
- *   _DTACK = 1;  -> processor negates _DS
- * }
- * Write cycle
- * if (_CS && _DS && !R/_W) {
- *   write_reg(RS15, D07);
- *   _DTACK = 1;
- * }
+int tn;
+/* Registers:
+ *  01 = gpip  0100.0111
+ *   0010.0000 = floppy
+ *   0001.0000 = acia
+ *  03 = iaer
  */
 struct mfp_t {
   uint8_t regs[256];
+
+  mfp_t() {
+    regs[0x01] = 0xff;
+  };
+  void set_gpio(int bit) {
+    regs[0x1] |= bit;
+  }
+  void clr_gpio(int bit) {
+    regs[0x1] &= ~bit;
+  };
 
   // setup timers
   mfptimer ta = { CH_TIMERA, 'a' };
@@ -352,23 +384,31 @@ struct mfp_t {
   int isr(int mask=-1) const { return mask & dp(ISRA); }; // servicing
   int imr(int mask=-1) const { return mask & dp(IMRA); }; // mask
 
+  void en(int n, int mask) {
+    regs[n]   |= (mask >> 8);
+    regs[n+2] |= mask;
+  }
+  void dis(int n, int mask) {
+    regs[n]   &= ~(mask >> 8);
+    regs[n+2] &= ~mask;
+  };
+
   // raise interrupt
   void raise(int ch) {
     const uint16_t mask = 1 << ch;
-    if ((ier() & imr() & mask) != 0) {
-      regs[IPRA] |= (mask >> 8);
-      regs[IPRB] |= (mask & 0xff);
-      printf("RAISE: mask:%.4x en:%.4x pend:%.4x mask:%.4x\n", mask, ier(), ipr(), imr());
+    if ((ier() & imr() & ~isr() & mask) != 0) {
+      // mark pending
+      en(IPRA, mask);
     }
   };
   int pending() {
     for (int i = 15; i >= 0; i--) {
       int mask = (1L << i);
-      if (ier() & ipr() & imr() & mask) {
-	regs[ISRA] |= (mask >> 8);
-	regs[ISRB] |= (mask & 0xff);
-	regs[IPRA] &= ~(mask >> 8);
-	regs[IPRB] &= ~(mask & 0xff);
+      if ((ier() & imr() & ipr() & mask) != 0) {
+	// turn on service
+	en(ISRA, mask);
+	// turn off pending
+	dis(IPRA, mask);
 	printf("service: %x\n", i);
 	return i;
       }
@@ -386,7 +426,11 @@ struct mfp_t {
       if (ta.tick()) raise(ta.id);
       if (tb.tick()) raise(tb.id);
       if (tc.tick()) raise(tc.id);
-      if (td.tick()) raise(td.id);
+
+      if (td.tick()) {
+	printf("serialtick : %d\n", tn++);
+	raise(td.id);
+      }
     };
   };
 };
@@ -396,20 +440,31 @@ const char *sk[] = {
   "tacr", "tbcr", "cdcr", "tadr", "tbdr", "tcdr", "tddr", "scr", "ucr", "rsr", "tsr", "udr"
 };
 
-static int cartio(void *arg, uint32_t addr, int mode, iodata_t& io) {
-  io = -1;
+static int cartio(void *arg, uint32_t addr, int mode, iodata_t& data) {
+  data = -1;
   return 0;
 }
 
-static int mfpio(void *arg, uint32_t addr, int mode, iodata_t& io) {
+int serpos;
+char serout[1024];
+
+static int mfpio(void *arg, uint32_t addr, int mode, iodata_t& data) {
   mfp_t *m = (mfp_t *)arg;
   uint8_t *regs = m->regs;
+  int c = 0;
   
-  bememio(m->regs, addr, mode, io);
+  bememio(m->regs, addr, mode, data);
   if ((mode & 0xff) == 'r') {
+    if (addr == TSR)
+      data |= 0x80;
+    printf("mfpread:  [%s] %.8x\n", sk[addr>>1],data);
     return 0;
   }
+  printf("mfpwrite: [%s] %.8x\n", sk[addr>>1],data);
   switch (addr) {
+  case GPIP:
+    regs[addr] |= 0x47;
+    break;
   case TACR:
   case TADR:
     m->ta.start(regs[TACR], regs[TADR]);
@@ -427,6 +482,18 @@ static int mfpio(void *arg, uint32_t addr, int mode, iodata_t& io) {
     break;
   case TDDR:
     m->td.start(regs[CDCR], regs[TDDR]);
+    break;
+  case UDR:
+    c = regs[UDR];
+    if (c < ' ' || c > 'z' || serpos > 100) {
+      serout[serpos] = 0;
+      serpos = 0;
+      printf("serial out: \"%s\"\n", serout);
+    }
+    else {
+      serout[serpos++] = c;
+    }
+    regs[UDR] = 0;
     break;
   }
   return 0;
@@ -450,7 +517,7 @@ enum ShifterRegs {
   RESOLUTION = 0x60,
 };
 
-struct shifter : public crtc_t {
+struct shifter_t : public crtc_t {
   uint8_t regs[256];
 
   // NTSC:
@@ -474,7 +541,7 @@ struct shifter : public crtc_t {
 
   bool de;
   uint32_t vaddr;
-  shifter() {
+  shifter_t() {
     crtc_t::init(x1, 512, y1, 313);
   };
   void sethblank(bool en) {
@@ -486,6 +553,7 @@ struct shifter : public crtc_t {
     if (en) {
       cpu_irq(4);
     }
+    tn = 0;
   };
   bool tick() {
     de = (hPos == hBlank && vPos >= y0 && vPos <= y1);
@@ -519,15 +587,16 @@ struct shifter : public crtc_t {
   };
   int planes() const {
     switch (regs[RESOLUTION] & 3) {
-    case 0: return 4;
-    case 1: return 2;
-    case 2: return 1;
+    case 0: return 4; // 320x200x16
+    case 1: return 2; // 640x200x4
+    case 2: return 1; // 640x400x1
     }
     return 0;
   };
   int xres() const {
     switch (regs[RESOLUTION] & 3) {
-    case 0: case 1: return 320;
+    case 0: return 320;
+    case 1: return 640;
     case 2: return 640;
     };
     return 0;
@@ -544,12 +613,13 @@ struct shifter : public crtc_t {
       uint16_t mask = 0x8000;
       for (int p = 0; p < 16; p++) {
 	int clr = pclr(pdata, mask);
+	// double width pixels for 320
 	*pxl++ = palette(clr);
 	if (width == 320)
 	  *pxl++ = palette(clr);
       }
     }
-  };
+  }
 };
 
 /* Keyboard ACIA (6850)
@@ -563,8 +633,10 @@ struct shifter : public crtc_t {
  * from the host keyboard directly into the receive fifo.
  */
 enum AciaRegs {
-  ACIA_CR = 0x00, // control (w) / status (r)
-  ACIA_DR = 0x02, // data
+  ACIA_KBD_CR  = 0x00, // control (w) / status (r)
+  ACIA_KBD_DR  = 0x02, // data
+  ACIA_MIDI_CR = 0x04, // control (w) / status (r)
+  ACIA_MIDI_DR = 0x06, // data
 };
 enum {
   ACIA_SR_RDRF = 0x01, // receive data register full
@@ -573,27 +645,60 @@ enum {
   ACIA_CR_IRQ  = 0x80, // receive interrupt enable
 };
 
+/* c00 w keyboard acia control
+ *  irrsssdd
+ *  i = interrupt enabled
+ *  rr
+ *   00 rts low, tx disable
+ *   01 rts low, tx enable
+ *   10 rts high,tx disable
+ *   11 rts high,tx enable
+ *  sss = bits.even/odd.stop
+ *  dd = divisor
+ *   00 normal
+ *   01 /16
+ *   10 /64
+ *   11 reset
+ * c00 r keyboard control
+ *  80 = interrupt request
+ *  40 = parity error
+ *  20 = rx overrun
+ *  10 = framing error
+ *  08 = cts
+ *  04 = dcd
+ *  02 = tx empty
+ *  01 = rx full
+ * c02 rw keyboard data
+ * c04  w midi acia control
+ * c04  r midi acia control
+ */
 struct ikbd_t {
   std::queue<uint8_t> q;
   uint8_t sr = 0;
   uint8_t cr = 0;
 
+  mfp_t *mfp;
+  
   void write_ctrl(uint8_t data) {
     cr = data;
     if ((cr & 0x3) == 3) {
       while (!q.empty())
 	q.pop();
       sr |= ACIA_SR_TDRE;
+      mfp->set_gpio(0x10);
     };
   };
   uint8_t status() const {
-    return sr;
+    return sr | 0x8; // cts
   };
   void push(int b) {
+    printf("push kbd: %x\n", b);
     q.push(b);
     sr |= ACIA_SR_RDRF;
-    if (cr & ACIA_CR_IRQ)
+    if (cr & ACIA_CR_IRQ) {
       sr |= ACIA_SR_IRQ;
+      mfp->raise(6);
+    }
   };
   uint8_t pop() {
     if (q.empty()) {
@@ -604,6 +709,7 @@ struct ikbd_t {
     if (q.empty()) {
       sr &= ~(ACIA_SR_RDRF | ACIA_SR_IRQ);
     }
+    mfp->set_gpio(0x10);
     return b;
   };
 };
@@ -661,24 +767,89 @@ uint8_t key_scancode(int key) {
   return 0;
 };
 
-int kbdio(void *arg, uint32_t addr, int mode, iodata_t& data) {
+struct fdc_t {
+  uint8_t regs[256];
+  uint8_t subregs[256];
+  
+  int dmaModeControl() const {
+    return ((regs[6] << 8) + regs[7]);
+  };
+  int dmaAddr() const {
+    return ((regs[0x9] << 16) + (regs[0xb] << 8) + (regs[0xd]));
+  };
+  // 04/05
+  //  0  cmdRegHi/Lo
+  //  2  trackRegHi/Lo
+  //  4  sectRegHi/Lo
+  //  6  datRegHi/Lo
+  //  16 sectCountRegLo
+  // 09 dmaAddrHi
+  // 0b dmaAddrMid
+  // 0d dmaAddrLo
+  void setReg(int addr, int v) {
+    subregs[(dmaModeControl() & 0x1f) + (addr & 1)] = v;
+  };
+};
+
+static int fdcio(void *arg, uint32_t addr, int mode, iodata_t& data) {
+  fdc_t *f = (fdc_t *)arg;
+  
+  bememio(f->regs, addr, mode, data);
+  if ((mode & 0xff) == 'r') {
+    printf("fdcread:  %.4x %.4x %.8x\n", addr, mode, data);
+  }
+  else {
+    printf("fdcwrite: %.4x %.4x %.8x\n", addr, mode, data);
+  }
+  return 0;
+}
+
+static int sndio(void *arg, uint32_t addr, int mode, iodata_t& data) {
+  data = 0xffffffff;
+  return 0;
+}
+
+// shifter io
+static int vidio(void *arg, uint32_t addr, int mode, iodata_t& data) {
+  shifter_t *s = (shifter_t *)arg;
+  
+  bememio(s->regs, addr, mode, data);
+  if ((mode & 0xff) == 'r') {
+    printf("vidread: %.4x\n", addr);
+  }
+  return 0;
+}
+
+static int kbdio(void *arg, uint32_t addr, int mode, iodata_t& data) {
   ikbd_t *kbd = (ikbd_t *)arg;
   bool wr = (mode & 0xff) == 'w';
 
   switch (addr) {
-  case ACIA_CR:
+  case ACIA_KBD_CR:
     if (wr)
       kbd->write_ctrl(data);
     else
       data = kbd->status();
+    printf("kbd_ctrl: %c %x\n", mode & 0xff, data);
     break;
-  case ACIA_DR:
+  case ACIA_KBD_DR:
     if (wr) {
       // host->IKBD command byte (reset, mouse mode, etc) - not modelled
       printf("kbd: ignoring host command %.2x\n", data);
     } else {
       data = kbd->pop();
     }
+    printf("kbd_data: %c %x\n", mode & 0xff, data);
+    break;
+  case ACIA_MIDI_CR:
+    if (!wr)
+      data |= 0x02;
+    printf("midi control: %x %x\n", addr, data);
+    break;
+  case ACIA_MIDI_DR:
+    printf("midi data: %x %x\n", addr, data);
+    if (wr)
+      printf("write midi data: %x\n", data);
     break;
   default:
     data = 0xff;
@@ -692,15 +863,19 @@ int rtcio(void *arg, uint32_t addr, int mode, iodata_t& data) {
 
 int dcfg;
 
-struct atarist : public bus_t, public shifter {
+struct atarist : public bus_t {
   Screen *scr;
 
+  shifter_t shifter;
   mfp_t mfp;
   ikbd_t kbd;
+  fdc_t fdc;
   uint8_t ram[520*1024];
   int showvec;
-  
+
+  bool halted;
   atarist() : bus_t(0xffffff) {
+    kbd.mfp = &mfp;
   };
   void bus_error(uint32_t addr, int mode) {
     uint32_t bb = cpu_read32(0x08);
@@ -710,12 +885,25 @@ struct atarist : public bus_t, public shifter {
       m68k_trapa(true, VECTOR_BUS_ERROR, SPC, IR[0], Sf ? 0x7e : 0x7a, "bus_error");
     }
   }
+  void diag() {
+    if (PC == 0xFC00E0) {
+      //halted = true; red
+    }
+    if (PC == 0xFC010e) {
+      //halted = true; // yellow
+    }
+    if (PC == 0xFC0AD0) {
+      //halted = true;
+    }
+  };
   void init() {
     size_t romsz;
     size_t cartsz;
+    uint8_t *cart = NULL;
 
-    auto rom = loadrom("tos104us.img", romsz);
-    auto cart = loadrom("JOUMPCRT.STC", cartsz);
+    auto rom = loadrom("DiagROMST.rom", romsz);
+    //auto rom = loadrom("tos104us.img", romsz);
+    //auto cart = loadrom("JOUMPCRT.STC", cartsz);
     //auto cart = loadrom("SWCRT4.STC", cartsz);
     //auto cart = loadrom("MISCCART.STC", cartsz);
     printf("got rom: %d %d\n", romsz, cartsz);
@@ -725,12 +913,52 @@ struct atarist : public bus_t, public shifter {
     }
     register_handler(0xfc0000, 0xff3fff, 0x03ffff, bememio, rom, _RD, "ROM");
     register_handler(0x000000, 0x000007, 0xffffff, bememio, rom, _RD, "OVERLAY");
-    register_handler(0x000008, 0x0003ff, 0xffffff, bememio, ram, _RW|_DBG, "RAM|dbg");
-    register_handler(0x000400, 0x07FFFF, 0xffffff, bememio, ram, _RW, "RAM");
-    
-    register_handler(0xff8200, 0xff82ff, 0x0000ff, bememio, shifter::regs,_RW,"SHIFTER");
+    register_handler(0x000008, 0x07FFFF, 0xffffff, bememio, ram, _RW, "RAM");
+
+    // etsy layout
+    // < 8 : rom
+    // < ramlen : ram
+    // >= 0xe00000 & < 0xf00040 : rom
+    // >= 0xf00040 & < 0xfa0000 : memerr
+    // >= 0xfa0000 & < 0xfc0000 : cart
+    // >= 0xfc0000 & < 0xff0000 : rom
+    // >= 0xff0000 : io
+    //========================
+    //   0xFF8001 : wr memcfg
+    //========================
+    //   0xFF8201 : wr vidhi
+    //   0xFF8203 : wr vidmid
+    //   0xFF8205 :  r vaddr high
+    //   0xff8207 :  r vaddr mid
+    //   0xff8209 :  r vaddr lo
+    //   0xFF820A : wr syncmode
+    //   >= 0xFF8240 & < 0xFF8260 : wr palette
+    //   == 0xFF8260 : wr screenmode
+    //========================
+    //   0xff8604 : w fdc.hi / r 0xff
+    //   0xff8605 : w fdc.lo / r drivestatus
+    //   0xff8606 : w dmamodecontrol.hi / r 0xff
+    //   0xff8607 : w dmamodecontrol.lo / r dmastatus
+    //   0xff8609 : wr dmahi
+    //   0xff860b : wr dmamid
+    //   0xff860d : wr dmalo
+    //========================
+    //   0xff88_0 : w psg.sel   / r soundreg
+    //   0xff88_2 : w psg.write / r 0xff
+    //========================
+    //   0xfffaxx : wr mfp
+    //   0xfffc00 : wr kbd.ctrl
+    //   0xfffc02 : wr kbd.data
+    //   0xfffc04 :  r midi control 0x2
+    //   0xfffc06 :  r midi data 0x0
+    uint32_t memcfg;
+    register_handler(0xff8000, 0xff80ff, 0x000003, bememio, &memcfg, _RW, "MEMCFG");
+    register_handler(0xff8200, 0xff82ff, 0x0000ff, vidio,   &shifter, _RW,"SHIFTER");
+    register_handler(0xff8600, 0xff86ff, 0x0000ff, fdcio,   &fdc, _RW, "FDC");
+    register_handler(0xff8800, 0xff89ff, 0x00000f, sndio,   NULL, _RW, "SND");
     register_handler(0xfffa00, 0xfffaff, 0x0000ff, mfpio,   &mfp, _RW, "MFP");
-    register_handler(0xfffc00, 0xfffc02, 0x00000f, kbdio,   &kbd, _RW, "KBD");
+    register_handler(0xfffc00, 0xfffc0f, 0x00000f, kbdio,   &kbd, _RW, "KBD");
+
     register_handler(0xfffc20, 0xfffcff, 0x0000ff, rtcio,   NULL, _RW, "RTC");
 
     scr = new Screen(640, 200, 30, 50, 0, NULL);
@@ -753,17 +981,22 @@ struct atarist : public bus_t, public shifter {
 	  exit(0);
 	}
       }
-#if 0
-      if (PC == 0xfc0de8) {
-	if (shifter::vPos == shifter::vBlank) {
-	  PC = 0xffc0df8;
-	}
+      if (PC == 0x0fc0de6 && !shifter.hPos && !shifter.vPos) {
+	PC = 0xfc0df8;
       }
-#endif
-      if (PC == 0xFC91CE) {
-	dumpvec(0, 0x3fc/4);
+      if (PC == 0xfc0532)
+	dumpvec(0, 0x50);
+      if (PC >= 0x8fa0000)
+	trace=2;
+      if (PC == 0x8fa019c) {
+	hexdump(ram, 1024*100);
+	//dumpcfg(::regs[0], 0, 1024*100);
       }
-      cpu_step();
+      diag();
+      if (!halted) {
+	cpu_step();
+	printf("ticks: %.6x\n", ctick);
+      }
       for (int i = 0; i < 5; i++)
 	ppu_tick();
     }
@@ -772,28 +1005,29 @@ struct atarist : public bus_t, public shifter {
     mfp.tick();
     auto pend = mfp.pending();
     if (pend >= 0) {
-      cpu_irq(6);
+      m68k_irq(6, 0x40 + pend);
     }
-    if (PC == 0x0fc0de6 && !shifter::hPos && !shifter::vPos) {
-      PC = 0xfc0df8;
-    }
-    if (shifter::tick()) {
-      printf("================= frame %d\n", frame);
+    if (shifter.tick()) {
+      printf("================= frame %d\n", shifter.frame);
       // end-of-frame
       for (auto kp : keytbl) {
 	if (scr->key(kp.key, true)) {
+	  kp.state = true;
 	  printf("keydown: '%c'\n", kp.key);
 	  kbd.push(kp.code);
+	}
+	else if (kp.state) {
 	  kbd.push(kp.code | 0x80);
+	  kp.state = false;
 	}
       }
       for (int i = 0; i < 16; i++) {
-	scr->scrrect(5 + i * 16, 210, 15, 5, shifter::palette(i));
+	scr->scrrect(5 + i * 16, 210, 15, 5, shifter.palette(i));
       }
       scr->scrtext(0, 220, WHITE, "frame: %d vbase:%.6x res:%.2x tmr:%.2x.%.2x.%.2x",
-		   shifter::frame,
-		   shifter::vbase(),
-		   shifter::regs[RESOLUTION],
+		   shifter.frame,
+		   shifter.vbase(),
+		   shifter.regs[RESOLUTION],
 		   mfp.regs[TACR],
 		   mfp.regs[TBCR],
 		   mfp.regs[CDCR]);
@@ -802,11 +1036,11 @@ struct atarist : public bus_t, public shifter {
       scr->draw();
       scr->clear();
     }
-    else if (shifter::de) {
+    else if (shifter.de) {
       // visible
       int pixels[640] = { 0 };
-      shifter::renderline(pixels);
-      drawline(scr, pixels, 640, 5, vPos-shifter::y0+5, 0);
+      shifter.renderline(pixels);
+      drawline(scr, pixels, 640, 5, shifter.vPos-shifter.y0+5, 0);
     }
   }
   int cpu_step() {
@@ -853,6 +1087,7 @@ void cpu_write32(const uint32_t addr, const uint32_t val, int mode) {
 }
 
 int main(int argc, char *argv[]) {
+  trace=2;
   dcfg = (argc > 2);
   setbuf(stdout, NULL);
   gentbl();
