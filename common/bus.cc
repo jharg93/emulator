@@ -41,10 +41,10 @@ int bus_t::write(uint32_t addr, iodata_t data, int sz) {
     //flogger(0, "Error: no write address: %.8x\n", addr);
     return -1;
   }
-  rc = h->fn(h->arg, addr & h->mask, sz | 'w', data);
   if (h->flag & _DBG) {
-    flogger(0, "Write%x: %.4x:%.8x[%s] %.8x {%d}\n", sz, addr, addr & h->mask, h->lbl, data, rc);
+    flogger(0, "Write%.4x: %.4x:%.8x[%s] %.8x {%d}\n", sz, addr, addr & h->mask, h->lbl, data, rc);
   }
+  rc = h->fn(h->arg, addr & h->mask, sz | 'w', data);
   return rc;
 };
 
@@ -64,7 +64,7 @@ int bus_t::read(uint32_t addr, iodata_t& data, int sz) {
   }
   rc = h->fn(h->arg, addr & h->mask, sz | 'r', data);
   if (h->flag & _DBG) {
-    flogger(0, "Read%x : %.4x:%.8x[%s] %.8x {%d}\n", sz, addr, addr & h->mask, h->lbl, data, rc);
+    flogger(0, "Read%.4x : %.4x:%.8x[%s] %.8x {%d}\n", sz, addr, addr & h->mask, h->lbl, data, rc);
   }
   bus_data = data;
   return rc;

@@ -33,6 +33,8 @@ struct json_node {
   };
 };
 
+void print_json(json_node *node, int lvl);
+
 /* JsonParser class */
 class JsonParser {
   int pos = 0, size = 0, lastch = -1;
@@ -92,6 +94,7 @@ class JsonParser {
     n->type = 'l';
     if (ch == ']' || ch < 0) {
       // empty list
+      printf("parselist done\n");
       return;
     }
     lastch = ch;

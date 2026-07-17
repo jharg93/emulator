@@ -26,7 +26,7 @@ static int getreg(json_node *n, rr_t *r, int flag) {
     if (flag == 0) {
       // store value to pointer
       *r->val = rv;
-      printf("%s <- %.8x\n", r->name, rv);
+      //printf("%s <- %.8x\n", r->name, rv);
     }
     else if (flag == 1 && (rv != *r->val)) {
       // check if value is correct
@@ -53,7 +53,7 @@ static int getmem(json_node *n, uint8_t *mem, int flag) {
     uint32_t memaddr = v->list[0]->toint();
     uint32_t rv = v->list[1]->toint();
 
-    printf("  %.8x <- %.2x\n", memaddr, rv);
+    //printf("  %.8x <- %.2x\n", memaddr, rv);
     if (flag == 0) {
       mem[memaddr] = rv;
     }
@@ -74,16 +74,21 @@ extern void done_json();
 //   run executes code with possible prefetch
 //   rr_t contains list of register names and a pointer (uint32_t)
 template <Arch a>
-void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32_t *)) {
+void read_json(const char *file, rr_t *regread, uint8_t *mem, int (*run)(uint32_t *)) {
   uint32_t prefetch[2];
   JsonParser p;
   json_node r;
   int rc = 0;
+  int line = 0;
 
   p.load(file);
   p.Parse(&r);
   for (auto json : r.list) {
     int errors;
+    line++;
+    if (line == 1934) {
+      printf("runme\n");
+    }
     
     auto name = json->map["name"];
     if (!name)
@@ -102,12 +107,30 @@ void read_json(const char *file, rr_t *regread, uint8_t *mem, void (*run)(uint32
       auto pf = ini->map["prefetch"];
       prefetch[0] = pf->list[0]->toint();
       prefetch[1] = pf->list[1]->toint();
-      printf("prefetch: %.8x %.8x\n", prefetch[0], prefetch[1]);
+      //printf("prefetch: %.8x %.8x\n", prefetch[0], prefetch[1]);
     }
 
     /* Run cpu single-step */
     PC -= 4;
-    run(prefetch);
+    auto rc = run(prefetch);
+
+    /* Get cycle count */
+    auto tr = json->map["transactions"];
+    int cktick = 0;
+    if (tr && rc >= 0) {
+      for (auto trp : tr->list) {
+	auto cs = trp->list[0]->tostr();
+	switch (cs[0]) {
+	case 'n': cktick += 0x200; break;
+	case 'r': cktick += 0x410; break;
+	case 'w': cktick += 0x401; break;
+	}
+      }
+      printf("cticks: %d(%d/%d) %d(%d/%d)\n",
+	     ctick >> 8, (ctick >> 4) & 0xf, ctick & 0xf,
+	     cktick >> 8, (cktick >> 4) & 0xf, cktick & 0xf);
+      printf("chk: %d\n", ctick == cktick);
+    }
     
     /* Compare final state */
     errors = 0;

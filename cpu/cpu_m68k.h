@@ -23,7 +23,7 @@ void ncpu_push32(uint32_t nv, const char *lbl = NULL) {
  
 #define ta(a,b) (((T_ ## a) << 8) + (T_ ## b))
  
-static bool m68k_trap(bool cond, int n, const char *s="");
+static bool m68k_trap(bool cond, int n, const char *s="", int npc = 0);
 static bool m68k_trapa(bool cond, int n, uint32_t addr, int ir = 0, int code = 0, const char *lbl="");
 void m68k_emul1010(uint16_t);
 void m68k_emul1111(uint16_t);
@@ -43,6 +43,7 @@ int SPC, trace;
 int eapc;
 int ipl = 0;
 int stopped;
+int eaflag;
 
 uint32_t m68k_busmask = -1;
 
@@ -442,8 +443,15 @@ static void _m68k_setsr(uint32_t nv)
   SR = nv;
 }
 
-static void m68k_setsr(uint32_t nv, int size)
+void dt(int dt, int sz) {
+  printf("eaflag: %x\n", dt);
+  if (dt && sz)
+    TR(0x200);
+};
+
+static void m68k_setsr(uint32_t nv, int size, int tr = 0)
 {
+  TR(tr);
   if (size == Byte) {
     SR = (SR & SR_VALIDBITS_HI) + (nv & SR_VALIDBITS_LO);
   }
@@ -453,7 +461,7 @@ static void m68k_setsr(uint32_t nv, int size)
 }
 
 /* Dump CPU Vector */
-static void dumpvec(uint32_t base = 0) {
+static void dumpvec(uint32_t base = 0, int n = 48) {
   const char *vector[] = {
     "sp", "pc", "bus error", "address error",
     "illegal", "div0", "chk", "trapv",
@@ -474,12 +482,17 @@ static void dumpvec(uint32_t base = 0) {
     "trap8", "trap9", "trap10", "trap11",
     "trap12", "trap13", "trap14", "trap15",
   };
-  for (int i = 0; i < 48; i++) {
-    printf(" %.2x %.4x %-16s: %.8x\n", i, i * 4, vector[i], cpu_read32(base + i *  4));
+  for (int i = 0; i < n; i++) {
+    auto ad = cpu_read32(base + (i * 4)); 
+    printf(" %.2x %.4x %-16s: %.8x [%s]\n",
+	   i, i * 4,
+	   i < 48 ? vector[i] : "---",
+	   ad, fnname(ad));
+	   
   }
 }
 
-bool cpu_irq(int n) {
+bool m68k_irq(int n, int trap = -1) {
   uint32_t npc = 0;
   uint16_t tsr = cpu_getflags();
   
@@ -488,8 +501,10 @@ bool cpu_irq(int n) {
     return false;
   }
   stopped = false;
-  npc = cpu_read32(_VBR + (n + 24) * 4);
-  printf("\n%.8x ===== IRQ:%.8x : %d/%d -> %.8x\n", SPC, PC, ipl, n, npc);
+  if (trap == -1)
+    trap = n + 24;
+  npc = cpu_read32(_VBR + (trap * 4));
+  printf("\n%.8x ===== IRQ:%.8x : %d/%d -> %.8x [%s]\n", SPC, PC, ipl, n, npc, fnname(npc));
   
   /* Set new IPL */
   ipl = n;
@@ -500,7 +515,11 @@ bool cpu_irq(int n) {
   return true;
 }
 
-bool m68k_trap(bool cond, int n, const char *s) {
+bool cpu_irq(int n) {
+  return m68k_irq(n);
+}
+  
+bool m68k_trap(bool cond, int n, const char *s, int npc) {
   uint16_t tsr = cpu_getflags();
 
   if (!cond) {
@@ -511,9 +530,10 @@ bool m68k_trap(bool cond, int n, const char *s) {
   _m68k_setsr((tsr & 0x071F) | 0x2000);
 
   // push original pc (or chk==new pc)
-  ncpu_push32(SPC, "0.spc");
+  npc = (npc == -1) ? PC : SPC;
+  ncpu_push32(npc, "0.spc");
   ncpu_push16(tsr, "0.tsr");
-  PC = cpu_read32(_VBR + (n * 4));
+  PC = cpu_read(_VBR + (n * 4), Long);
   return true;
 }
 
@@ -890,8 +910,12 @@ uint32_t DnXn(uint32_t base, uint32_t& xn, const char *lbl)
   xn = cpu_fetch(Word, lbl);
   xxx = (xn >> 12) & 7;
 
+  TR(0x200);
+  
   // Only support simple mode
-  assert((xn & 0x700) == 0);
+  if (xn & 0x700) {
+    printf("xn is : %.4x\n", xn);
+  }
 
   // Get Index
   off = ((xn & 0x8000)? A[xxx] : D[xxx]);
@@ -917,26 +941,36 @@ uint32_t val_t::easrc() {
   int n = (type & 7);
   switch (eamap[type]) {
   case EA_reg_Dn:
+    eaflag |= (1L << 0);
     trace_fmt("D%d", n);
     return D[n];
   case EA_reg_An:
+    eaflag |= (1L << 1);
     trace_fmt("A%d", n);
     return A[n];
   case EA_mem_An:
+    eaflag |= (1L << 2);
     trace_fmt("(A%d)", n);
     return A[n];
   case EA_inc_An:
+    eaflag |= (1L << 3);
     trace_fmt("(A%d)+", n);
     return AnX(A[n], easz(0x10+n, size));
   case EA_dec_An:
+    if (eaflag == 0) {
+      TR(0x200);
+    }
+    eaflag |= (1L << 4);
     trace_fmt("-(A%d)", n);
     eapc += 2;
     return AnX(A[n],-easz(0x10+n, size));
   case EA_d16_An:
+    eaflag |= (1L << 5);
     src = d16(A[n], xn, "d16an");
     trace_fmt("0x%X(A%d)", xn, n);
     return src;
   case EA_Xn8_An:
+    eaflag |= (1L << 6);
     src = DnXn(A[n], xn, "AnXn");
     trace_fmt("0x%X(A%d,%c%d.%c)",
 	      (xn & 0xFF), n,
@@ -945,18 +979,22 @@ uint32_t val_t::easrc() {
 	      (xn & 0x800) ? 'l' : 'w');
     return src;
   case EA_off_16:
+    eaflag |= (1L << 7);
     src = (int16_t)cpu_fetch(Word, ".w");
     trace_fmt("(%.4x).W", src);
     return src;
   case EA_off_32:
+    eaflag |= (1L << 8);
     src = cpu_fetch(Long, ".l");
     trace_fmt("(%.8x).L", src);
     return src;
   case EA_d16_PC:
+    eaflag |= (1L << 9);
     src = d16(PC, xn, "d16pc");
     trace_fmt("0x%X(PC)", xn);
     return src;
   case EA_Xn8_PC:
+    eaflag |= (1L << 10);
     src = DnXn(PC, xn, "PCXn");
     trace_fmt("0x%X(A%d,%c%d.%c)",
 	      (xn & 0xFF), n,
@@ -965,6 +1003,7 @@ uint32_t val_t::easrc() {
 	      (xn & 0x800) ? 'l' : 'w');
     return src;
   case EA_imm_sz:
+    eaflag |= (1L << 11);
     src = cpu_fetch(size, "imm");
     trace_fmt("#0x%x", src);
     return src;
@@ -995,12 +1034,15 @@ void val_t::set(uint32_t val, int nsz)
   int n = type & 7;
 
   if (type < 0x08) {
+    // write to D register
     setval(D[n], val, nsz);
   }
   else if (type < 0x10) {
+    // write to full A register
     A[n] = val;
   }
   else if (type < 0x3c) {
+    // write to memory
     cpu_write(value, val, nsz);
   }
   else {
@@ -1344,6 +1386,10 @@ static void m68k_add(instr_t& i, uint32_t src1, uint32_t src2, uint32_t src3, in
   uint32_t sum = src1 + src2 + src3;
   int zf = Zf;
 
+  printf("dt: %x %x\n", i.dst.type, i.size);
+  dt(i.dst.type <= 0xf, i.size == Long);
+  dt(i.dst.type >= 0x8 && i.dst.type <= 0xf, i.size == Word);
+
   // rflag=1,nonz or rflag=3,nz
   setea2(i, sum, i.size, setflag != 0);
   if (setflag) {
@@ -1361,6 +1407,10 @@ static void m68k_sub(instr_t& i, uint32_t src1, uint32_t src2, uint32_t src3, in
 {
   uint32_t sum = src1 - src2 - src3;
   int zf = Zf;
+
+  printf("dt: %x %x\n", i.dst.type, i.size);
+  dt(i.dst.type <= 0xf, i.size == Long);
+  dt(i.dst.type >= 0x8 && i.dst.type <= 0xf, i.size == Word);
 
   // rflag=1,nonz or rflag=3,nz
   setea2(i, sum, i.size, setflag != 0);
@@ -1389,16 +1439,19 @@ static void m68k_cmp(instr_t& i, uint32_t src1, uint32_t src2, int size)
 }
 
 static void m68k_and(instr_t& i, uint32_t src1, uint32_t src2) {
+  dt(i.dst.type <= 0xf, i.size == Long);
   i.rflag = 0x07;
   i.dstsz = i.size;
   i.dstval = src1 & src2;
 }
 static void m68k_or(instr_t& i, uint32_t src1, uint32_t src2) {
+  dt(i.dst.type <= 0xf, i.size == Long);
   i.rflag = 0x07;
   i.dstsz = i.size;
   i.dstval = src1 | src2;
 }
 static void m68k_xor(instr_t& i, uint32_t src1, uint32_t src2) {
+  dt(i.dst.type <= 0xf, i.size == Long);
   i.rflag = 0x07;
   i.dstsz = i.size;
   i.dstval = src1 ^ src2;
@@ -1520,6 +1573,7 @@ static void m68k_nop() {
 }
 
 static void m68k_rts() {
+  TR(0x410);
   m68k_setpc(cpu_pop32(), false, "RTS");
 }
 
@@ -1643,6 +1697,7 @@ static void m68k_lsr(instr_t& i, uint32_t src1, uint32_t src2, int size = None)
 {
   bool c = 0;
 
+  TR(0x200);
   roxbits(i, src1);
   for (uint32_t i = 0; i < src2; i++) {
     c = testbit(src1, 0);
@@ -1659,6 +1714,7 @@ static void m68k_lsl(instr_t& i, uint32_t src1, uint32_t src2)
   int bits;
   bool c = 0;
 
+  TR(0x200);
   bits = roxbits(i, src1);
   for (uint32_t i = 0; i < src2; i++) {
     c = testbit(src1, bits);
@@ -1681,6 +1737,7 @@ static void m68k_asr(instr_t& i, uint32_t src1, uint32_t src2)
   uint32_t bits, m;
   bool c = 0;
 
+  TR(0x200);
   bits = roxbits(i, src1);
   m = (src1 & (1L << bits)); // msb
   for (uint32_t i = 0; i < src2; i++) {
@@ -1698,7 +1755,8 @@ static void m68k_asl(instr_t& i, uint32_t src1, uint32_t src2)
   uint32_t bits, r;
   bool c = 0;
   bool v = 0;
-  
+
+  TR(0x200);
   bits = roxbits(i, src1);
   for (uint32_t i = 0; i < src2; i++) {
     c = testbit(src1, bits);
@@ -1720,6 +1778,7 @@ static void m68k_roxr(instr_t& i, uint32_t src1, uint32_t src2)
   int bits;
   bool c = Xf;
   
+  TR(0x200);
   bits = roxbits(i, src1);
   for (uint32_t i = 0; i < src2; i++) {
     c = testbit(src1, 0);
@@ -1735,7 +1794,8 @@ static void m68k_roxl(instr_t& i, uint32_t src1, uint32_t src2)
 {
   int bits;
   bool c = Xf;
-  
+
+  TR(0x200);
   bits = roxbits(i, src1);
   for (uint32_t i = 0; i < src2; i++) {
     c = testbit(src1, bits);
@@ -1752,6 +1812,7 @@ static void m68k_ror(instr_t& i, uint32_t src1, uint32_t src2)
   int bits;
   bool c = 0;
   
+  TR(0x200);
   bits = roxbits(i, src1);
   for (uint32_t i = 0; i < src2; i++) {
     c = testbit(src1, 0);
@@ -1767,7 +1828,8 @@ static void m68k_rol(instr_t& i, uint32_t src1, uint32_t src2)
 {
   int bits;
   bool c = 0;
-  
+
+  TR(0x200);
   bits = roxbits(i, src1);
   for (uint32_t i = 0; i < src2; i++) {
     c = testbit(src1, bits);
@@ -1784,7 +1846,8 @@ int decode_68k(const uint16_t op)
 {
   opcode_t *opc;
   uint32_t sj;
-    
+
+  eaflag = 0;
   eapc = 0;
   ir = 0;
   IR[ir++] = op;
@@ -1795,6 +1858,7 @@ int decode_68k(const uint16_t op)
     return -1;
   }
   ctick = 0;
+  TR(0x410);
   opc = opmap[op];
   if (opc && opc->fn) {
     instr_t i = getargs(op, opc->size, opc->arg0);
@@ -1802,8 +1866,9 @@ int decode_68k(const uint16_t op)
     if (trace & 1) {
       cpu_showregs();
     }
+    const char *dstr = NULL;
     if (trace & 2) {
-      printf("!%.6X  %s\n", SPC, m68k_disasm(i, opc->mnem));
+      dstr = m68k_disasm(i, opc->mnem);
     }
     i.rflag = 0;
     opc->fn(i);
@@ -1814,6 +1879,12 @@ int decode_68k(const uint16_t op)
     if (i.rflag & 0x4) {
       // post-nz00
       nz00(i.dstval, i.dstsz);
+    }
+    if (trace & 2) {
+      printf("!%.6X %3d(%d/%d) %.4x %s\n", SPC,
+	     ctick >> 8,
+	     (ctick >> 4) & 0xF,
+	     (ctick & 0xF), op, dstr);
     }
     //printf("%.4x TR: %4d(%2d/%2d) %s\n", op, (ctick >> 8), (ctick >> 4) & 0xF, ctick & 0xF, opc->mnem);
     return 0;
@@ -1832,16 +1903,16 @@ int decode_68k(const uint16_t op)
 opcode_t optab[] = {
   o("0000.000.000.111.100", "___________x", "______", Byte, Imm_SR,   SR,   "or.b    %i, CCR",       { m68k_setsr(cpu_getflags() | IMM, Byte); }),
   o("0000.000.001.111.100", "___________x", "S_____", Word, Imm_SR,   SR,   "or.w    %i, SR",        { m68k_setsr(cpu_getflags() | IMM, Word); }),
-  o("0000.000.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "or%s    %i, %ea",       { m68k_or(i, SRC, IMM); }),
+  o("0000.000.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "ori%s   %i, %ea",       { m68k_or(i, SRC, IMM); }),
   o("0000.001.000.111.100", "___________x", "______", Byte, Imm_SR,   SR,   "and.b   %i, CCR",       { m68k_setsr(cpu_getflags() & IMM, Byte); }),
   o("0000.001.001.111.100", "___________x", "S_____", Word, Imm_SR,   SR,   "and.w   %i, SR",        { m68k_setsr(cpu_getflags() & IMM, Word); }),
-  o("0000.001.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "and%s   %i, %ea",       { m68k_and(i, SRC, IMM); }), // gand
-  o("0000.010.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  Imm_EA,   EA,   "sub%s   %i, %ea",       { m68k_sub(i, SRC, IMM, 0, _XNZVC); }), // gsub
-  o("0000.011.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  Imm_EA,   EA,   "add%s   %i, %ea",       { m68k_add(i, SRC, IMM, 0, _XNZVC); }), // gadd
+  o("0000.001.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "andi%s  %i, %ea",       { m68k_and(i, SRC, IMM); }), // gand
+  o("0000.010.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  Imm_EA,   EA,   "subi%s  %i, %ea",       { m68k_sub(i, SRC, IMM, 0, _XNZVC); }), // gsub
+  o("0000.011.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  Imm_EA,   EA,   "addi%s  %i, %ea",       { m68k_add(i, SRC, IMM, 0, _XNZVC); }), // gadd
   o("0000.101.000.111.100", "___________x", "______", Byte, Imm_SR,   SR,   "eor.b   %i, CCR",       { m68k_setsr(cpu_getflags() ^ IMM, Byte); }),
   o("0000.101.001.111.100", "___________x", "S_____", Word, Imm_SR,   SR,   "eor.w   %i, SR",        { m68k_setsr(cpu_getflags() ^ IMM, Word); }),
-  o("0000.101.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "eor%s   %i, %ea",       { m68k_xor(i, SRC, IMM); }), // gxor
-  o("0000.110.0ss.mmm.yyy", "1_1111111___", "__NZVC", Any,  Imm_EA,   EA,   "cmp%s   %i, %ea",       { m68k_cmp(i,  SRC, IMM, i.size); }),
+  o("0000.101.0ss.mmm.yyy", "1_1111111___", "__NZ00", Any,  Imm_EA,   EA,   "eori%s  %i, %ea",       { m68k_xor(i, SRC, IMM); }), // gxor
+  o("0000.110.0ss.mmm.yyy", "1_1111111___", "__NZVC", Any,  Imm_EA,   EA,   "cmpi%s  %i, %ea",       { m68k_cmp(i,  SRC, IMM, i.size); }),
   o("0000.100.000.mmm.yyy", "1_111111111_", "___Z__", Byte, Imm_EA,   EA,   "btst    %i, %ea",       { m68k_btst(i, SRC, IMM); }),
   o("0000.100.001.mmm.yyy", "1_1111111___", "___Z__", Byte, Imm_EA,   EA,   "bchg    %i, %ea",       { m68k_bchg(i, SRC, IMM); }),
   o("0000.100.010.mmm.yyy", "1_1111111___", "___Z__", Byte, Imm_EA,   EA,   "bclr    %i, %ea",       { m68k_bclr(i, SRC, IMM); }),
@@ -1863,7 +1934,7 @@ opcode_t optab[] = {
 
   o("0100.000.011.mmm.yyy", "1_1111111___", "______", Word, SR_EA,    EA,   "move.w  SR, %ea",       { m68k_mov<uint32_t>(i, cpu_getflags(), false); }),
   o("0100.010.011.mmm.yyy", "1_1111111111", "______", Word, EA_SR,    SR,   "move.b  %ea, CCR",      { m68k_setsr(SRC, Byte); }),
-  o("0100.011.011.mmm.yyy", "1_1111111111", "S_____", Word, EA_SR,    SR,   "move.w  %ea, SR",       { m68k_setsr(SRC, Word); }),
+  o("0100.011.011.mmm.yyy", "1_1111111111", "S_____", Word, EA_SR,    SR,   "move.w  %ea, SR",       { m68k_setsr(SRC, Word, 0x800); }),
   o("0100.000.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  EA,       EA,   "negx%s  %ea",           { m68k_sub(i, 0, SRC, Xf, _XNzVC); }),
   o("0100.001.0ss.mmm.yyy", "1_1111111___", "__0100", Any,  EA,       EA,   "clr%s   %ea",           { m68k_mov<uint32_t>(i, 0); }),
   o("0100.010.0ss.mmm.yyy", "1_1111111___", "_XNZVC", Any,  EA,       EA,   "neg%s   %ea",           { m68k_sub(i, 0, SRC, 0, _XNZVC); }),
@@ -1876,7 +1947,7 @@ opcode_t optab[] = {
   o("0100.101.011.111.100", "___________x", "______", None, None,     None, "illegal",               { m68k_trap(true, VECTOR_ILLEGAL_INSTRUCTION); }),
   o("0100.101.011.mmm.yyy", "1_1111111___", "__NZ00", Byte, EA,       EA,   "tas     %ea",           { m68k_tas(i, SRC); }),
   o("0100.101.0ss.mmm.yyy", "1_111111111_", "__NZ00", Any,  EA,       EA,   "tst%s   $%ea",          { m68k_cmp(i, SRC, 0, i.size); }),
-  o("0100.111.001.00v.vvv", "xx__________", "______", None, Imm4,     None, "trap    %i",            { m68k_trap(true, 32 + IMM); }),
+  o("0100.111.001.00v.vvv", "xx__________", "______", None, Imm4,     None, "trap    %i",            { m68k_trap(true, 32 + IMM, "", -1); }),
   o("0100.111.001.010.aaa", "__x_________", "______", Word, Imm_Ay,   rAy,  "link    A%y, %i",       { m68k_link(Ay, IMM); }),
   o("0100.111.001.011.aaa", "___x________", "______", None, rAy,      rAy,  "unlk    A%y",           { m68k_unlink(Ay); }),
   o("0100.111.001.100.aaa", "____x_______", "S_____", Long, rAy,      rUSP, "move    A%y, USP",      { m68k_moveusp(USP, Ay); }),
@@ -1914,7 +1985,7 @@ opcode_t optab[] = {
   o("1000.ddd.100.000.ddd", "x___________", "_X?z?C", Byte, Dy_Dx,    rDx, "sbcd    D%y, D%x",      { m68k_sbcd(i, Dx, Dy, Xf); }),
   o("1000.xxx.100.001.yyy", "_x__________", "_X?z?C", Byte, dAyx,     dAx, "sbcd    -(A%y),-(A%x)", { m68k_sbcd(i, DST, SRC, Xf); }),
 
-  o("1001.aaa.011.mmm.yyy", "111111111111", "______", Word, EA_Ax,    rAx,  "suba.w  %ea, A%x",      { setval(Ax, Ax - (int16_t)SRC, Long); }),
+  o("1001.aaa.011.mmm.yyy", "111111111111", "______", Word, EA_Ax,    rAx,  "suba.w  %ea, A%x",      { TR(0x200); setval(Ax, Ax - (int16_t)SRC, Long); }),
   o("1001.aaa.111.mmm.yyy", "111111111111", "______", Long, EA_Ax,    rAx,  "suba.l  %ea, A%x",      { m68k_sub(i, Ax,  SRC, 0, NOSET); }),  // gsub
   o("1001.ddd.0ss.mmm.yyy", "111111111111", "_XNZVC", Any,  EA_Dx,    rDx,  "sub%s   %ea, D%x",      { m68k_sub(i, Dx,  SRC, 0, _XNZVC); }), // gsub ->
   o("1001.ddd.1ss.mmm.yyy", "s_1111111___", "_XNZVC", Any,  Dx_EA,    EA,   "sub%s   D%x, %ea",      { m68k_sub(i, SRC, Dx,  0, _XNZVC); }), // gsub <-
@@ -1939,7 +2010,7 @@ opcode_t optab[] = {
 
   o("1101.ddd.0ss.mmm.yyy", "111111111111", "_XNZVC", Any,  EA_Dx,    rDx,  "add%s   %ea, D%x",      { m68k_add(i, SRC, Dx, 0, _XNZVC); }), // gadd ->
   o("1101.ddd.1ss.mmm.yyy", "s_1111111___", "_XNZVC", Any,  Dx_EA,    EA,   "add%s   D%x, %ea",      { m68k_add(i, Dx,  SRC,0, _XNZVC); }), // gadd <-
-  o("1101.aaa.011.mmm.yyy", "111111111111", "______", Word, EA_Ax,    rAx,  "adda.w  %ea, A%x",      { setval(Ax, Ax + (int16_t)SRC, Long); }),
+  o("1101.aaa.011.mmm.yyy", "111111111111", "______", Word, EA_Ax,    rAx,  "adda.w  %ea, A%x",      { TR(0x200); setval(Ax, Ax + (int16_t)SRC, Long); }),
   o("1101.aaa.111.mmm.yyy", "111111111111", "______", Long, EA_Ax,    rAx,  "adda.l  %ea, A%x",      { m68k_add(i, Ax,  SRC, 0, 0); }), // gadd
   o("1101.ddd.1ss.000.ddd", "x___________", "_XNzVC", Any,  Dy_Dx,    rDx,  "addx%s  D%y, D%x",      { m68k_add(i, Dy,  Dx, Xf, _XNzVC); }), // gadd
   o("1101.xxx.1ss.001.yyy", "_x__________", "_XNzVC", Any,  dAyx,     dAx,  "addx%s  -(A%y),-(A%x)", { m68k_add(i, SRC, DST,Xf, _XNzVC); }), // gadd
@@ -1963,7 +2034,7 @@ opcode_t optab[] = {
   o("1110.ddd.0ss.100.ddd", "____x_______", "_XNZVC", Any,  Dx_Dy,    rDy,  "asr%s   D%x, D%y",      { m68k_asr(i,  Dy, Dx & 0x3f); }),// gshift
   o("1110.ddd.1ss.100.ddd", "____x_______", "_XNZVC", Any,  Dx_Dy,    rDy,  "asl%s   D%x, D%y",      { m68k_asl(i, Dy, Dx & 0x3f); }),// gshift
   o("1110.ddd.0ss.101.ddd", "_____x______", "_XNZ0C", Any,  Dx_Dy,    rDy,  "lsr%s   D%x, D%y",      { m68k_lsr(i, Dy, Dx & 0x3f); }),// gshift
-  o("1110.ddd.1ss.101.ddd", "_____x______", "_XNZ0C", Any,  Dx_Dy,    rDy,  "lsl%s   D%x, D%y",      { m68k_lsl(i, Dy, Dx & 0x3f); }),// gshift
+  o("1110.ddd.1ss.101.ddd", "_____x______", "_XNZ0C", Any,  Dx_Dy,    rDy,  "lsl%s   D%x, D%y",      { m68k_lsl(i, Dy, Dx & 0x3f); }),// gshifOAt
   o("1110.ddd.0ss.110.ddd", "______x_____", "_XNZ0C", Any,  Dx_Dy,    rDy,  "roxr%s  D%x, D%y",      { m68k_roxr(i, Dy, Dx & 0x3f); }),// gshift
   o("1110.ddd.1ss.110.ddd", "______x_____", "_XNZ0C", Any,  Dx_Dy,    rDy,  "roxl%s  D%x, D%y",      { m68k_roxl(i, Dy, Dx & 0x3f); }),// gshift
   o("1110.ddd.0ss.111.ddd", "_______x____", "__NZ0C", Any,  Dx_Dy,    rDy,  "ror%s   D%x, D%y",      { m68k_ror(i, Dy, Dx & 0x3f); }),// gshift
@@ -2194,6 +2265,7 @@ constexpr uint32_t MV_DBCC = 0xf0f850c8;
 constexpr uint32_t MV_RTS  = 0xffff4e75;
 constexpr uint32_t MV_RTE  = 0xffff4e73;
 constexpr uint32_t MV_JSR  = 0xffc04e80;
+constexpr uint32_t MV_CMPM = 0xf138b108;
 
 const int isimm(int eat)
 {
@@ -2228,15 +2300,19 @@ void dumpcfg(int off, int base, int size)
 	printf("illlegal op trap : %.4x\n", op);
 	break;
       }
+      auto omv = mv(opc);
 
-      instr_t i = getargs(op, opc->size, opc->arg0);
+      instr_t i{};
+      if (omv != MV_CMPM) {
+	i = getargs(op, opc->size, opc->arg0);
+      }
       printf("  %.8x : %.4x %s\n", SPC,
 	     op,  m68k_disasm(i, opc->mnem));
       stk.push(SPC, PC - SPC, dstk::CODE, "code");
 
       nxt[0] = PC;
       nxt[1] = -1;
-      switch(mv(opc)) {
+      switch(omv) {
       case MV_LEA:
 	leaval = i.src.value;
 	break;
@@ -2247,7 +2323,6 @@ void dumpcfg(int off, int base, int size)
 	if (isimm(i.src.type)) {
 	  nxt[1] = SRCADDR;
 	}
-	printf("jmp/jsr: %x, %x %x\n", PC, nxt[0], nxt[1]);
 	break;
       case MV_DBCC:
 	/* conditional jump */
@@ -2256,14 +2331,12 @@ void dumpcfg(int off, int base, int size)
       case MV_BCC: 
 	if ((op & 0xFF00) == 0x6000) {
 	  /* unconditional jump */
-	  //nxt[0] = -1;
+	  nxt[0] = -1;
 	  nxt[1] = IMM;
-	  printf("next.bra: %x %x\n",  nxt[0], nxt[1]);
 	}
 	else {
 	  /* conditional jump */
 	  nxt[1] = IMM;
-	  printf("next: %x %x\n",  nxt[0], nxt[1]);
 	}
 	break;
       case MV_RTS:

@@ -23,6 +23,43 @@ void flogger(int n, const char *fmt, ...) {
   vprintf(fmt, ap);
 }
 
+    // etsy layout
+    // < 8 : rom
+    // < ramlen : ram
+    // >= 0xe00000 & < 0xf00040 : rom
+    // >= 0xf00040 & < 0xfa0000 : memerr
+    // >= 0xfa0000 & < 0xfc0000 : cart
+    // >= 0xfc0000 & < 0xff0000 : rom
+    // >= 0xff0000 : io
+    //========================
+    //   0xFF8001 : wr memcfg
+    //========================
+    //   0xFF8201 : wr vidhi
+    //   0xFF8203 : wr vidmid
+    //   0xFF8205 :  r vaddr high
+    //   0xff8207 :  r vaddr mid
+    //   0xff8209 :  r vaddr lo
+    //   0xFF820A : wr syncmode
+    //   >= 0xFF8240 & < 0xFF8260 : wr palette
+    //   == 0xFF8260 : wr screenmode
+    //========================
+    //   0xff8604 : w fdc.hi / r 0xff
+    //   0xff8605 : w fdc.lo / r drivestatus
+    //   0xff8606 : w dmamodecontrol.hi / r 0xff
+    //   0xff8607 : w dmamodecontrol.lo / r dmastatus
+    //   0xff8609 : wr dmahi
+    //   0xff860b : wr dmamid
+    //   0xff860d : wr dmalo
+    //========================
+    //   0xff88_0 : w psg.sel   / r soundreg
+    //   0xff88_2 : w psg.write / r 0xff
+    //========================
+    //   0xfffaxx : wr mfp
+    //   0xfffc00 : wr kbd.ctrl
+    //   0xfffc02 : wr kbd.data
+    //   0xfffc04 :  r midi control 0x2
+    //   0xfffc06 :  r midi data 0x0
+
 // build color from plane data
 auto pclr = [](uint16_t *p, uint16_t &mask) {
   int clr = 0;
@@ -379,10 +416,10 @@ struct mfp_t {
   mfptimer td = { CH_TIMERD, 'd' };
 
   int dp(int h) const { return (regs[h] << 8) + regs[h+2]; };
-  int ier(int mask=-1) const { return mask & dp(IERA); }; // enabled
-  int ipr(int mask=-1) const { return mask & dp(IPRA); }; // pending
-  int isr(int mask=-1) const { return mask & dp(ISRA); }; // servicing
-  int imr(int mask=-1) const { return mask & dp(IMRA); }; // mask
+  int ier() const { return dp(IERA); }; // enabled
+  int ipr() const { return dp(IPRA); }; // pending
+  int isr() const { return dp(ISRA); }; // servicing
+  int imr() const { return dp(IMRA); }; // mask
 
   void en(int n, int mask) {
     regs[n]   |= (mask >> 8);
@@ -405,9 +442,8 @@ struct mfp_t {
     for (int i = 15; i >= 0; i--) {
       int mask = (1L << i);
       if ((ier() & imr() & ipr() & mask) != 0) {
-	// turn on service
+	// turn on service, turn off pending
 	en(ISRA, mask);
-	// turn off pending
 	dis(IPRA, mask);
 	printf("service: %x\n", i);
 	return i;
@@ -601,6 +637,11 @@ struct shifter_t : public crtc_t {
     };
     return 0;
   };
+  void setvaddr() {
+    regs[0x5] = (vaddr >> 16);
+    regs[0x7] = (vaddr >> 8);
+    regs[0x9] = vaddr;
+  };
   void renderline(int *pxl) {
     uint16_t pdata[4] = { 0 };
 
@@ -609,6 +650,7 @@ struct shifter_t : public crtc_t {
       for (int p = 0; p < planes(); p++) {
 	pdata[p] = cpu_read16(vaddr);
 	vaddr += 2;
+	setvaddr();
       }
       uint16_t mask = 0x8000;
       for (int p = 0; p < 16; p++) {
@@ -714,59 +756,6 @@ struct ikbd_t {
   };
 };
 
-// Atari ST keyboard scancodes (make code; release = code | 0x80). These
-// match the PC/XT set for the keys ST and PC share.
-uint8_t ascii_scancode(int ch) {
-  switch (ch) {
-  case '1': return 0x02; case '2': return 0x03; case '3': return 0x04;
-  case '4': return 0x05; case '5': return 0x06; case '6': return 0x07;
-  case '7': return 0x08; case '8': return 0x09; case '9': return 0x0A;
-  case '0': return 0x0B; case '-': return 0x0C; case '=': return 0x0D;
-  case 'q': return 0x10; case 'w': return 0x11; case 'e': return 0x12;
-  case 'r': return 0x13; case 't': return 0x14; case 'y': return 0x15;
-  case 'u': return 0x16; case 'i': return 0x17; case 'o': return 0x18;
-  case 'p': return 0x19;
-  case 'a': return 0x1E; case 's': return 0x1F; case 'd': return 0x20;
-  case 'f': return 0x21; case 'g': return 0x22; case 'h': return 0x23;
-  case 'j': return 0x24; case 'k': return 0x25; case 'l': return 0x26;
-  case ';': return 0x27; case '\'':return 0x28; case '`': return 0x29;
-  case '\\':return 0x2B;
-  case 'z': return 0x2C; case 'x': return 0x2D; case 'c': return 0x2E;
-  case 'v': return 0x2F; case 'b': return 0x30; case 'n': return 0x31;
-  case 'm': return 0x32; case ',': return 0x33; case '.': return 0x34;
-  case '/': return 0x35;
-  case ' ': return 0x39;
-  }
-  return 0;
-};
-
-uint8_t key_scancode(int key) {
-  switch (key) {
-  case Key::K_ENTER:  return 0x1C;
-  case Key::K_TAB:    return 0x0F;
-  case Key::K_DEL:    return 0x0E; // backspace
-  case Key::K_LSHIFT: return 0x2A;
-  case Key::K_RSHIFT: return 0x36;
-  case Key::K_LCTRL:
-  case Key::K_RCTRL:  return 0x1D;
-  case Key::K_UP:     return 0x48;
-  case Key::K_DOWN:   return 0x50;
-  case Key::K_LEFT:   return 0x4B;
-  case Key::K_RIGHT:  return 0x4D;
-  case Key::K_F1:     return 0x3B;
-  case Key::K_F2:     return 0x3C;
-  case Key::K_F3:     return 0x3D;
-  case Key::K_F4:     return 0x3E;
-  case Key::K_F5:     return 0x3F;
-  case Key::K_F6:     return 0x40;
-  case Key::K_F7:     return 0x41;
-  case Key::K_F8:     return 0x42;
-  case Key::K_F9:     return 0x43;
-  case Key::K_F10:    return 0x44;
-  }
-  return 0;
-};
-
 struct fdc_t {
   uint8_t regs[256];
   uint8_t subregs[256];
@@ -815,7 +804,7 @@ static int vidio(void *arg, uint32_t addr, int mode, iodata_t& data) {
   
   bememio(s->regs, addr, mode, data);
   if ((mode & 0xff) == 'r') {
-    printf("vidread: %.4x\n", addr);
+    printf("vidread: %.4x %.2x\n", addr, data);
   }
   return 0;
 }
@@ -859,6 +848,7 @@ static int kbdio(void *arg, uint32_t addr, int mode, iodata_t& data) {
 }
 
 int rtcio(void *arg, uint32_t addr, int mode, iodata_t& data) {
+  return 0;
 }
 
 int dcfg;
@@ -873,6 +863,10 @@ struct atarist : public bus_t {
   uint8_t ram[520*1024];
   int showvec;
 
+  uint8_t *rom = 0;
+  uint8_t *cart = 0;
+
+  uint32_t memcfg;
   bool halted;
   atarist() : bus_t(0xffffff) {
     kbd.mfp = &mfp;
@@ -899,13 +893,12 @@ struct atarist : public bus_t {
   void init() {
     size_t romsz;
     size_t cartsz;
-    uint8_t *cart = NULL;
 
-    auto rom = loadrom("DiagROMST.rom", romsz);
-    //auto rom = loadrom("tos104us.img", romsz);
-    //auto cart = loadrom("JOUMPCRT.STC", cartsz);
-    //auto cart = loadrom("SWCRT4.STC", cartsz);
-    //auto cart = loadrom("MISCCART.STC", cartsz);
+    //rom = loadrom("DiagROMST.rom", romsz);
+    rom = loadrom("tos104us.img", romsz);
+    cart = loadrom("JOUMPCRT.STC", cartsz);
+    //cart = loadrom("SWCRT4.STC", cartsz);
+    //cart = loadrom("MISCCART.STC", cartsz);
     printf("got rom: %d %d\n", romsz, cartsz);
 
     if (cart != NULL) {
@@ -915,43 +908,6 @@ struct atarist : public bus_t {
     register_handler(0x000000, 0x000007, 0xffffff, bememio, rom, _RD, "OVERLAY");
     register_handler(0x000008, 0x07FFFF, 0xffffff, bememio, ram, _RW, "RAM");
 
-    // etsy layout
-    // < 8 : rom
-    // < ramlen : ram
-    // >= 0xe00000 & < 0xf00040 : rom
-    // >= 0xf00040 & < 0xfa0000 : memerr
-    // >= 0xfa0000 & < 0xfc0000 : cart
-    // >= 0xfc0000 & < 0xff0000 : rom
-    // >= 0xff0000 : io
-    //========================
-    //   0xFF8001 : wr memcfg
-    //========================
-    //   0xFF8201 : wr vidhi
-    //   0xFF8203 : wr vidmid
-    //   0xFF8205 :  r vaddr high
-    //   0xff8207 :  r vaddr mid
-    //   0xff8209 :  r vaddr lo
-    //   0xFF820A : wr syncmode
-    //   >= 0xFF8240 & < 0xFF8260 : wr palette
-    //   == 0xFF8260 : wr screenmode
-    //========================
-    //   0xff8604 : w fdc.hi / r 0xff
-    //   0xff8605 : w fdc.lo / r drivestatus
-    //   0xff8606 : w dmamodecontrol.hi / r 0xff
-    //   0xff8607 : w dmamodecontrol.lo / r dmastatus
-    //   0xff8609 : wr dmahi
-    //   0xff860b : wr dmamid
-    //   0xff860d : wr dmalo
-    //========================
-    //   0xff88_0 : w psg.sel   / r soundreg
-    //   0xff88_2 : w psg.write / r 0xff
-    //========================
-    //   0xfffaxx : wr mfp
-    //   0xfffc00 : wr kbd.ctrl
-    //   0xfffc02 : wr kbd.data
-    //   0xfffc04 :  r midi control 0x2
-    //   0xfffc06 :  r midi data 0x0
-    uint32_t memcfg;
     register_handler(0xff8000, 0xff80ff, 0x000003, bememio, &memcfg, _RW, "MEMCFG");
     register_handler(0xff8200, 0xff82ff, 0x0000ff, vidio,   &shifter, _RW,"SHIFTER");
     register_handler(0xff8600, 0xff86ff, 0x0000ff, fdcio,   &fdc, _RW, "FDC");
@@ -981,7 +937,7 @@ struct atarist : public bus_t {
 	  exit(0);
 	}
       }
-      if (PC == 0x0fc0de6 && !shifter.hPos && !shifter.vPos) {
+      if (PC == 0x0fc0de6) {
 	PC = 0xfc0df8;
       }
       if (PC == 0xfc0532)
@@ -993,12 +949,15 @@ struct atarist : public bus_t {
 	//dumpcfg(::regs[0], 0, 1024*100);
       }
       diag();
+      
       if (!halted) {
 	cpu_step();
-	printf("ticks: %.6x\n", ctick);
+	dv = ctick >> 8;
+	printf("ticks: %d(%d/%d)\n", dv, (ctick >> 4) & 0xf, ctick & 0xf);
       }
-      for (int i = 0; i < 5; i++)
+      for (int i = 0; i < dv; i++)
 	ppu_tick();
+      dv = 4;
     }
   };
   void ppu_tick() {

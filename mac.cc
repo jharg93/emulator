@@ -1163,7 +1163,7 @@ void mac68k::init(uint8_t *rom, int len)
 static void *ioptr(uint32_t addr, int mode)
 {
   addr &= 0xFFFFFF;
-  if (addr <= 0x003FFFFF && sys.overlay == sys.ram) {
+  if (addr <= 0x003FFFFF && sys.overlay == sys.ram && sys.ram != NULL) {
     return &sys.ram[addr];
   }
   return NULL;
@@ -1676,7 +1676,7 @@ static rr_t m68kreg[] = {
 };
 
 // Callback for json test
-static void m68k_test_json(uint32_t *prefetch) {
+static int m68k_test_json(uint32_t *prefetch) {
   uint16_t op;
 
   printf("initial PC: %.8x\n", PC);
@@ -1693,7 +1693,7 @@ static void m68k_test_json(uint32_t *prefetch) {
   SPC = PC;
   op = cpu_fetch(Word);
   printf("decode: %.4x %.8x\n", op, PC);
-  decode_68k(op);
+  auto rc = decode_68k(op);
   tmpsr = SR;
   if (SR & 0x2000) {
     ssp = SP;
@@ -1702,6 +1702,7 @@ static void m68k_test_json(uint32_t *prefetch) {
     usp = SP;
   }
   PC += 4;
+  return rc;
 }
 
 const char *eastr[16] = { "Dn", "An", "(An)", "(An)+", "-(An)", "(An,d16)", "(An,Xn,d8)", "(xxx).w", "(xxx).l",

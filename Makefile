@@ -32,13 +32,13 @@ ppc: cpu/cpu_ppc.cc common/bus.cc common/cpu.cc
 8086: 8086.cc $(STDH) emit.cc json/pjson.cc $(STDC)
 	$(LXCPP) $(CFLAGS) -o 8086 8086.cc -mavx2 $(STDC)
 
-mac: mac.cc $(STDC) json/pjson.cc
+mac: mac.cc $(STDC) json/pjson.cc  cpu/cpu_m68k.h
 	$(LXCPP) $(CFLAGS) -o mac mac.cc $(STDC)
 
-amiga: amiga.cc $(STDC)
+amiga: amiga.cc $(STDC)  cpu/cpu_m68k.h
 	$(LXCPP) $(CFLAGS) -o amiga amiga.cc $(STDC)
 
-genesis: genesis.cc genesis.h $(STDC)
+genesis: genesis.cc genesis.h $(STDC)  cpu/cpu_m68k.h
 	$(LXCPP) $(CFLAGS) -o genesis genesis.cc -DM68K $(STDC)
 
 appleii: appleii.cc cpu/cpu_6502.cc $(STDC)
@@ -50,7 +50,7 @@ n64: n64.cc $(STDC)
 atarixl: atarixl.cc cpu/cpu_6502.cc $(STDC)
 	$(LXCPP) $(CFLAGS) -o atarixl atarixl.cc cpu/cpu_6502.cc $(STDC)
 
-atarist: atarist.cc ${STDC}
+atarist: atarist.cc ${STDC} cpu/cpu_m68k.h
 	$(LXCPP) $(CFLAGS) -DM68K -o atarist atarist.cc $(STDC)
 
 invaders: i8080.c common/bus.cc

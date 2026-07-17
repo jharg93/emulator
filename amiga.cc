@@ -2273,7 +2273,7 @@ int amiga::bpdma(int mode) {
   int bp = ((mode >> 4) & 0xF);
   if (bp >= bpu) {
     BPLxDAT(bp) = 0;
-    return nm;
+    return nmode;
   }
 #ifdef bltro
   // rundma... if hackbltro, only run if frame==3
@@ -3316,6 +3316,7 @@ int main(int argc, char *argv[])
   for (int i = 0; i < 8; i++) {
     thegame.BPLxDAT(i) = 0;
   }
+  trace=2;
   while(1) {
     int nc = 1;
     nc = hackbltro();
@@ -3327,4 +3328,4 @@ int main(int argc, char *argv[])
   cpu_shutdown();
   return 0;
 }
-r
+
